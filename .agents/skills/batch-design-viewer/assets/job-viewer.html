@@ -1,0 +1,372 @@
+<title>@TITLE@</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/*@CORE_CSS@*/
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <h1 id="h-title"></h1>
+    <span class="pg" id="h-pg"></span>
+  </header>
+  <div class="layout">
+    <nav class="rail" aria-label="読む順">
+      <p class="cap">読む順</p>
+      <ol id="rail"></ol>
+      <p class="railnote">ジョブ全体を、ステップ（S）・データストア（D）・データフロー（F）・データ項目（DI）の共通IDでつないでいます。プログラムごとの詳細は、ステップの「プログラムビューワー」から開きます。</p>
+    </nav>
+    <main id="main"></main>
+  </div>
+</div>
+
+<script>
+const V = "@VIEW@";
+/*@CORE_JS@*/
+
+/* ---------- データ ---------- */
+const STEPS = V.steps, SB = Object.fromEntries(STEPS.map(s => [s.id, s]));
+const STORES = V.stores, DB = Object.fromEntries(STORES.map(s => [s.id, s])), DNO = Object.fromEntries(STORES.map(s => [s.no, s]));
+const FIELDS = V.fields, LOG = V.items, IB = Object.fromEntries(LOG.map(i => [i.id, i]));
+const FLOWS = V.dfd.flows, FB = Object.fromEntries(FLOWS.map(f => [f.id, f]));
+const IC = V.itemCrud;
+const SRCS = V.sources;
+const CRUD_TEXT = { C: "作成", R: "参照", U: "更新", D: "削除", O: "開閉のみ" };
+const letters = (c) => (c || "").split("").map(x => `<span class="l-${x}" title="${CRUD_TEXT[x]}">${x}</span>`).join("");
+const stepPgm = (s) => s.program || s.pgm || "";
+
+const VIEWS = [
+  { id: "overview", t: "概要", d: "ジョブ全体の目的と構成" },
+  { id: "jobflow", t: "ジョブフロー", d: "ジョブとステップの順序" },
+  { id: "dfd", t: "DFD（ジョブ全体）", d: "ステップとデータストアの間の流れ" },
+  { id: "db", t: "DB・ファイル一覧", d: "ジョブで使う全データセット" },
+  { id: "crud", t: "CRUD図", d: "どのステップが、どれを作成・参照・更新するか" },
+  { id: "items", t: "データ項目定義", d: "データセットをまたいだ項目のつながり" },
+  { id: "coverage", t: "網羅と未確認", d: "自動チェックと残りの確認事項" },
+];
+const state = {
+  view: "overview", crudMode: "store", crudFilter: "used", itemFilter: "all",
+  selBy: { jobflow: "S:" + (STEPS[1] || STEPS[0]).id, dfd: "S:" + (STEPS[1] || STEPS[0]).id, db: "D:" + (STORES.find(s => /U/.test(Object.values(s.crudBy).join(""))) || STORES[0]).id, items: "I:" + LOG[0].id, crud: null },
+};
+
+/* ---------- つながり ---------- */
+function related(k) {
+  const [t, id] = sp(k), out = { S: new Set(), D: new Set(), F: new Set(), I: new Set() };
+  const storeOfField = (fk) => DNO[FIELDS[fk].store].id;
+  if (t === "S") {
+    SB[id].dds.forEach(d => out.D.add(d.store));
+    FLOWS.filter(f => f.from === k || f.to === k).forEach(f => out.F.add(f.id));
+    Object.entries(IC).forEach(([iid, by]) => { if (by[id]) out.I.add(iid); });
+  }
+  if (t === "D") {
+    Object.keys(DB[id].crudBy).forEach(s => out.S.add(s));
+    FLOWS.filter(f => f.from === k || f.to === k).forEach(f => out.F.add(f.id));
+    (DB[id].fields || []).forEach(fk => out.I.add(FIELDS[fk].item));
+  }
+  if (t === "F") {
+    const f = FB[id];
+    [f.from, f.to].forEach(e => { const [tt, ii] = sp(e); out[tt].add(ii); });
+    const st = sp(f.from)[0] === "S" ? sp(f.from)[1] : sp(f.to)[1], ds = sp(f.from)[0] === "D" ? sp(f.from)[1] : sp(f.to)[1];
+    Object.entries(IC).forEach(([iid, by]) => { if (by[st] && by[st].fields.some(fk => storeOfField(fk) === ds)) out.I.add(iid); });
+  }
+  if (t === "I") {
+    const it = IB[id];
+    it.fields.forEach(fk => out.D.add(storeOfField(fk)));
+    Object.keys(IC[id] || {}).forEach(s => out.S.add(s));
+    FLOWS.filter(f => { const s = [f.from, f.to].find(e => e.startsWith("S:")), d = [f.from, f.to].find(e => e.startsWith("D:")); return out.S.has(sp(s)[1]) && out.D.has(sp(d)[1]) && (IC[id]?.[sp(s)[1]]?.fields || []).some(fk => storeOfField(fk) === sp(d)[1]); }).forEach(f => out.F.add(f.id));
+  }
+  out[t].delete(id);
+  return out;
+}
+function chipLabel(k) {
+  const [t, id] = sp(k);
+  if (t === "S") return `${id} ${SB[id].title}`;
+  if (t === "D") return `${DB[id].no} ${DB[id].name}`;
+  if (t === "I") return `${id} ${IB[id].name}`;
+  if (t === "F") { const f = FB[id], a = sp(f.from), b = sp(f.to), nm = (x) => x[0] === "S" ? x[1] : DB[x[1]].no; return `${id} ${nm(a)}→${nm(b)} ${f.crud}`; }
+  return k;
+}
+const ORDER = (k) => { const [t, id] = sp(k); return t === "D" ? DB[id].no.slice(1).padStart(3, "0") : t === "F" ? id.slice(1).padStart(3, "0") : id; };
+const sorted = (keys) => [...keys].sort((a, b) => ORDER(a) < ORDER(b) ? -1 : 1);
+function relHtml(k) {
+  const r = related(k);
+  return relBox([
+    ["ステップ", sorted([...r.S].map(x => "S:" + x))],
+    ["DFD", sorted([...r.F].map(x => "F:" + x))],
+    ["DB・ファイル", sorted([...r.D].map(x => "D:" + x))],
+    ["データ項目", sorted([...r.I].map(x => "I:" + x))],
+  ]);
+}
+function goSel(k) {
+  const [t] = sp(k);
+  const view = { S: "jobflow", F: "dfd", D: "db", I: "items" }[t];
+  state.selBy[view] = k;
+  show(view);
+}
+
+/* ---------- 詳細 ---------- */
+function srcOf(id, ranges, hl = []) { const s = SRCS[id]; return s ? `<p class="ev" style="font-size:12px;color:var(--muted)">${esc(s.path)}</p>` + srcBlock(s.lines, ranges, hl, s.kind) : ""; }
+function stepDetail(id) {
+  const s = SB[id];
+  const where = s.job ? `${s.job} / ${s.step}${s.procStep ? "." + s.procStep : ""} · PGM=${s.pgm}` : `JCLなし · PGM=${s.pgm}`;
+  let h = `<div class="dhead"><h3>${id} ${esc(s.title)}</h3><span class="orig">${esc(where)}</span></div><div class="dbody">
+    <p>${esc(s.desc)}</p>
+    ${s.assumed ? `<div class="callout">${esc(s.note || "JCLが無いため、ジョブへの組み込みは仮定です。")}</div>` : ""}
+    ${s.util ? `<div class="callout">${esc(s.util)}</div>` : ""}
+    ${s.warnings.map(w => `<div class="callout">${esc(w)}</div>`).join("")}
+    ${s.viewer ? `<div><a class="btn primary" style="text-decoration:none;display:inline-block" href="${esc(s.viewer)}">プログラムビューワーを開く →</a></div>` : s.program ? `<p class="ev" style="font-size:12.5px;color:var(--muted)">${esc(s.program)} のプログラムビューワーはまだありません。モデルを書いて build_viewer.py program で追加できます。</p>` : ""}
+    ${s.facts ? `<dl class="dl"><dt>プログラム</dt><dd class="mono">${esc(s.program)}（${s.facts.lines}行・段落${s.facts.paragraphs}）</dd><dt>呼び出し</dt><dd class="mono">${esc(s.facts.calls.join(", ") || "なし")}</dd></dl>` : ""}
+    <b class="rh">DD とデータセット</b>
+    <div class="scroll"><table><thead><tr><th>DD</th><th>データセット</th><th>CRUD</th><th>DISP</th></tr></thead><tbody>
+      ${s.dds.map(d => `<tr><td class="mono">${esc(d.dd)}</td><td><button class="chip" data-go="D:${esc(d.store)}">${DB[d.store].no} ${esc(DB[d.store].name)}</button>${d.generation ? ` <span class="mono" style="font-size:11px;color:var(--muted)">(${esc(d.generation)})</span>` : ""}${d.assumed ? " " + pill("warn", "推定") : ""}</td><td class="mono">${letters(d.crud)}</td><td class="mono" style="font-size:11.5px">${esc(d.disp || "—")}</td></tr>`).join("")}
+    </tbody></table></div>
+    ${relHtml("S:" + id)}`;
+  if (s.src) h += `<b class="rh">JCL</b>` + srcOf(s.src, [s.jcl]);
+  if (s.procSrc) h += `<b class="rh">プロシージャ</b>` + srcOf(s.procSrc, [[1, SRCS[s.procSrc].lines.length]]);
+  return h + `</div>`;
+}
+function ddEvidence(step, d) {
+  let h = "";
+  if (d.ops && d.ops.length) {
+    h += `<div class="scroll"><table><tbody>${d.ops.map(o => `<tr><td class="mono">${o.verb}</td><td class="mono">${o.line}行</td><td class="mono">${esc(o.paragraph || "")}</td></tr>`).join("")}</tbody></table></div>`;
+    h += srcOf(step.programSrc, mergeLines([...new Set([...(d.select ? [] : []), ...d.ops.map(o => o.line), ...d.open.map(o => o.line)])].sort((a, b) => a - b)));
+  } else if (d.open && d.open.length) {
+    h += `<p>OPEN（${d.open.map(o => o.mode).join("・")}）だけで、READ・WRITE などの入出力文はありません。</p>` + srcOf(step.programSrc, d.open.map(o => [o.line, o.line]));
+  }
+  if (d.line && step.src) h += srcOf(d.override ? step.src : step.src, [[d.line, d.end]]);
+  return h;
+}
+function storeDetail(id) {
+  const s = DB[id], fs = (s.fields || []).map(k => FIELDS[k]);
+  const cls = (f) => f.name === "FILLER" ? "u-fill" : f.isKey ? "u-ok" : IC[f.item] ? "u-rec" : "u-none";
+  return `<div class="dhead"><h3>${s.no} ${esc(s.name)}</h3><span class="orig">${esc(s.id)}</span></div><div class="dbody">
+    <p>${esc(s.desc || "")}</p>
+    <dl class="dl"><dt>編成</dt><dd>${esc(s.kind || "—")}${s.gdg ? "・世代" : ""}</dd><dt>レコード長</dt><dd>${s.lrecl || "—"}バイト</dd>
+      <dt>レイアウト</dt><dd class="mono">${s.layout ? esc(`${s.layout.record}（${s.layout.origin === "program" ? s.layout.program + " 内の定義" : "COPY " + s.layout.origin}）`) + (s.layout.inherited ? `<br><span style="color:var(--muted)">${esc(DB[s.layout.inherited].no)} と同じレイアウト</span>` : "") : "不明"}</dd>
+      <dt>CRUD</dt><dd>${Object.entries(s.crudBy).map(([st, c]) => `<button class="chip" data-go="S:${st}">${st} ${esc(SB[st].title)}</button> <span class="mono">${letters(c)}</span>`).join("<br>")}</dd></dl>
+    ${fs.length ? `<div><b class="rh">レコードレイアウト</b>${layoutBar(fs, s.lrecl || fs[fs.length - 1].pos[1], s.name, cls)}
+      <div class="legend" style="padding:4px 0 0;border:0"><span><i style="background:var(--accent);border-color:var(--accent)"></i>キー</span><span><i style="background:var(--accent-soft);border-color:var(--accent)"></i>ジョブで使う</span><span><i style="background:var(--line);border-color:var(--line)"></i>使わない</span><span><i style="background:var(--sunken)"></i>予備領域</span></div></div>
+    <div class="scroll"><table><thead><tr><th class="num">位置</th><th>物理項目</th><th>データ項目</th><th>型</th></tr></thead><tbody>
+      ${fs.map(f => `<tr><td class="num mono">${f.pos[0]}–${f.pos[1]}</td><td class="mono">${esc(f.name)}${f.isKey ? " " + pill("ok", "キー") : ""}</td><td><button class="chip" data-go="I:${f.item}">${f.item} ${esc(IB[f.item].name)}</button></td><td class="mono">${esc(f.pic)}</td></tr>`).join("")}
+    </tbody></table></div>` : `<div class="callout">レコードレイアウトが分かりません。モデルの datasets で layoutRecord か layoutFrom を指定できます。</div>`}
+    ${relHtml("D:" + id)}
+    <b class="rh">JCL の DD</b>
+    ${s.dds.map(d => { const st = SB[d.step]; return `<p style="font-size:12.5px">${d.step} ${esc(st.title)} · DD ${esc(d.dd)} · ${letters(d.crud)}${d.assumed ? " " + pill("warn", "推定") : ""}</p>` + (d.line && st.src ? srcOf(st.src, [[d.line, d.end]]) : ""); }).join("")}
+  </div>`;
+}
+function flowDetail(id) {
+  const f = FB[id], [ta, a] = sp(f.from), [, b] = sp(f.to);
+  const stepId = ta === "S" ? a : b, storeId = ta === "D" ? a : b, st = SB[stepId], d = st.dds.find(x => x.store === storeId);
+  return `<div class="dhead"><h3>${id} ${esc(chipLabel("F:" + id).split(" ").slice(1).join(" "))}</h3><span class="orig">${esc(chipLabel(f.from))} → ${esc(chipLabel(f.to))}</span></div><div class="dbody">
+    <p>${f.crud.split("").map(c => CRUD_TEXT[c]).join("・")}（DD ${esc(d.dd)}）</p>
+    ${relHtml("F:" + id)}
+    <b class="rh">根拠</b>${ddEvidence(st, d)}
+  </div>`;
+}
+function itemDetail(iid) {
+  const it = IB[iid], fs = it.fields.map(k => FIELDS[k]), by = IC[iid] || {};
+  return `<div class="dhead"><h3>${it.id} ${esc(it.name)}</h3><span class="orig">${[...new Set(fs.map(f => f.name))].join(" · ")}</span></div><div class="dbody">
+    <dl class="dl"><dt>型</dt><dd class="mono">${it.pics.join(" / ")}</dd><dt>格納先</dt><dd>${fs.length}か所</dd></dl>
+    ${it.pics.length > 1 ? `<div class="callout">格納先によって型が違います。移送時の桁あふれや変換に注意が必要です。</div>` : ""}
+    <div class="scroll"><table><thead><tr><th>格納先</th><th>物理項目</th><th>型</th><th class="num">位置</th></tr></thead><tbody>
+      ${fs.map(f => `<tr><td><button class="chip" data-go="D:${esc(DNO[f.store].id)}">${f.store} ${esc(DNO[f.store].name)}</button></td><td class="mono">${esc(f.name)}${f.isKey ? " " + pill("ok", "キー") : ""}</td><td class="mono">${esc(f.pic)}</td><td class="num mono">${f.pos[0]}–${f.pos[1]}</td></tr>`).join("")}
+    </tbody></table></div>
+    <b class="rh">ステップごとの CRUD（推定）</b>
+    <div class="scroll"><table class="matrix"><thead><tr>${STEPS.map(s => `<th>${s.id}</th>`).join("")}</tr></thead><tbody><tr>${STEPS.map(s => `<td class="mono">${letters(by[s.id]?.crud || "")}</td>`).join("")}</tr></tbody></table></div>
+    ${relHtml("I:" + iid)}
+    ${Object.entries(by).filter(([, c]) => Object.keys(c.ev).length).map(([sid, c]) => `<b class="rh">${sid} ${esc(SB[sid].title)} の根拠</b>` + srcOf(SB[sid].programSrc, mergeLines([...new Set(Object.values(c.ev).flat())].sort((a, b) => a - b)))).join("")}
+  </div>`;
+}
+
+/* ---------- 各画面 ---------- */
+const R = {};
+R.overview = () => {
+  const o = V.overview;
+  return `<div class="viewhead"><h2>概要</h2><span class="doctag">設計書でいうと：ジョブ一覧・バッチ処理一覧</span></div>
+  <p class="lead">${esc(o.lead || "")}</p>
+  <div class="panel docmap"><b>設計書のつながり</b>
+    <div class="dm">
+      <button data-v="jobflow"><b>ジョブフロー</b><span>ジョブ・S</span></button><span class="ar">S番号<br>→</span>
+      <button data-v="dfd"><b>DFD</b><span>S・F・D</span></button><span class="ar">D番号<br>→</span>
+      <button data-v="db"><b>DB・ファイル一覧</b><span>D・DSN</span></button><span class="ar">CRUD<br>→</span>
+      <button data-v="crud"><b>CRUD図</b><span>D×S・DI×S</span></button><span class="ar">項目<br>→</span>
+      <button data-v="items"><b>データ項目定義</b><span>DI</span></button><span class="ar">ステップ<br>→</span>
+      <button data-v="jobflow"><b>プログラムビューワー</b><span>処理フロー・行</span></button>
+    </div>
+    <p class="lead" style="margin:10px 0 0">データセットはDD名ではなくデータセット名（DSN）で同じものと判定し、ステップをまたいで1つのデータストア（D）にまとめています。CRUDはプログラムの入出力文とJCLから自動で求め、項目単位のCRUDは項目名の参照と代入先から推定しています。</p>
+  </div>
+  <div class="panel summary">${(o.summary || []).map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join("")}</div>
+  <div class="panel scroll"><table>
+    <thead><tr><th>S</th><th>ジョブ / ステップ</th><th>プログラム</th><th>内容</th><th class="num">データセット</th><th>状態</th></tr></thead>
+    <tbody>${STEPS.map(s => `<tr data-go="S:${s.id}" style="cursor:pointer"><td class="mono">${s.id}</td><td class="mono">${esc(s.job ? s.job + " / " + s.step : "（JCLなし）")}</td><td class="mono">${esc(stepPgm(s))}</td><td>${esc(s.title)}</td><td class="num">${s.dds.length}</td><td>${s.assumed ? pill("warn", "仮置き") : s.util ? pill("warn", "推定あり") : pill("ok", "JCLあり")}</td></tr>`).join("")}</tbody>
+  </table></div>`;
+};
+
+R.jobflow = () => {
+  const [, sel] = sp(state.selBy.jobflow);
+  const W = 196, G = 40, X0 = 30;
+  const groups = [];
+  STEPS.forEach((s, i) => { const key = s.job || "（JCLなし）"; if (!groups.length || groups[groups.length - 1].key !== key) groups.push({ key, first: i, last: i, assumed: !s.job }); else groups[groups.length - 1].last = i; });
+  const width = X0 * 2 + STEPS.length * W + (STEPS.length - 1) * G;
+  let s = `<svg viewBox="0 0 ${width} 220" style="width:100%;min-width:${Math.min(width, 900)}px;max-width:${width}px;height:auto;display:block" role="img" aria-label="ジョブフロー">
+    <defs><marker id="ahj" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker></defs>`;
+  groups.forEach(g => {
+    const x = X0 + g.first * (W + G) - 14, w = (g.last - g.first + 1) * (W + G) - G + 28;
+    s += `<rect class="jobframe" x="${x}" y="22" width="${w}" height="180" rx="10"/><text x="${x + 12}" y="42" font-size="12.5" font-weight="700">${esc(g.key)}</text>
+      ${g.assumed ? `<text class="sub" x="${x + 12}" y="58">仮置き</text>` : ""}`;
+  });
+  STEPS.forEach((st, i) => {
+    const x = X0 + i * (W + G), y = 74;
+    if (i) s += `<polyline class="edge ${STEPS[i - 1].assumed || st.assumed ? "dash" : ""}" points="${x - G},${y + 46} ${x},${y + 46}" marker-end="url(#ahj)"/>`;
+    s += `<g class="stepbox ${st.assumed ? "assumed" : ""} ${st.id === sel ? "sel" : ""}" data-k="S:${st.id}"><rect class="shape" x="${x}" y="${y}" width="${W}" height="92" rx="6"/>
+      <text class="sub" x="${x + 12}" y="${y + 20}">${st.id} · ${esc(st.step || "—")}${st.procStep ? "." + esc(st.procStep) : ""}</text>
+      <text x="${x + 12}" y="${y + 42}" font-size="13.5" font-weight="700">${esc(stepPgm(st))}</text>
+      <text x="${x + 12}" y="${y + 62}" font-size="12">${esc(st.title.length > 15 ? st.title.slice(0, 15) + "…" : st.title)}</text>
+      <text class="sub" x="${x + 12}" y="${y + 80}">DD ${st.dds.length} · ${esc(st.viewer ? "ビューワーあり" : st.facts ? "解析済み" : "ユーティリティ")}</text></g>`;
+  });
+  s += `</svg>`;
+  return `<div class="viewhead"><h2>ジョブフロー</h2><span class="doctag">設計書でいうと：ジョブフロー図・ジョブネット図</span></div>
+  <p class="lead">ジョブ（破線の枠）とステップの実行順です。ステップを押すと、DD とデータセットの対応、JCL、プログラムビューワーへのリンクが右に出ます。</p>
+  <div class="flowgrid stack">
+    <div class="panel scroll" style="padding:12px">${s}</div>
+    <aside class="panel detail" id="detail">${stepDetail(sel)}</aside>
+  </div>`;
+};
+
+function dfdModel() {
+  const nodes = [
+    ...STEPS.map(s => { const [x, y] = V.dfd.steps[s.id], t = s.title; const cut = Math.ceil(t.length / 2); return { key: "S:" + s.id, shape: "circle", x, y, r: 56, no: s.id, lines: t.length > 8 ? [t.slice(0, Math.min(cut, 9)), t.slice(Math.min(cut, 9), 18)] : [t], sub: stepPgm(s), cls: s.assumed ? "unused" : "" }; }),
+    ...STORES.map(s => { const [x, y] = V.dfd.stores[s.id]; return { key: "D:" + s.id, shape: "store", x, y, w: 176, h: 44, no: s.no, title: s.name, sub: s.id.replace(/^AWS\.M2\.CARDDEMO\./, "") + (s.gdg ? " (+1)" : ""), cls: Object.values(s.crudBy).join("") === "O" ? "unused" : "" }; }),
+  ];
+  const flows = FLOWS.map(f => ({ key: "F:" + f.id, from: f.from, to: f.to, label: f.crud, cls: f.dash || SB[sp(f.from)[0] === "S" ? sp(f.from)[1] : sp(f.to)[1]].assumed ? "est" : "", offset: f.offset, lt: f.offset ? (f.offset > 0 ? 0.62 : 0.38) : 0.5, lo: [0, -4] }));
+  return { width: V.dfd.width, height: V.dfd.height, minWidth: 1000, nodes, flows };
+}
+R.dfd = () => {
+  const k = state.selBy.dfd, [t, id] = sp(k);
+  const detail = t === "S" ? stepDetail(id) : t === "D" ? storeDetail(id) : flowDetail(id);
+  return `<div class="viewhead"><h2>DFD（ジョブ全体）</h2><span class="doctag">設計書でいうと：DFD（データフロー図）</span></div>
+  <p class="lead">丸がステップ（プロセス）、左端に番号を付けた箱がデータセット（データストア）です。上の段はこのジョブでは読むだけのデータ、下の段はこのジョブで作成・更新するデータです。矢印の文字はCRUDで、破線は仮置きのステップや開閉のみの関係です。</p>
+  <div class="flowgrid stack">
+    <div class="panel"><div class="scroll">${dfdSvg(dfdModel(), k)}</div>
+      <div class="legend"><span>C 作成</span><span>R 参照</span><span>U 更新</span><span>D 削除</span><span>O 開閉のみ</span><span>破線：仮置き・推定</span></div></div>
+    <aside class="panel detail" id="detail">${detail}</aside>
+  </div>`;
+};
+
+R.db = () => {
+  const [, id] = sp(state.selBy.db);
+  return `<div class="viewhead"><h2>DB・ファイル一覧</h2><span class="doctag">設計書でいうと：DB一覧・ファイル一覧・データセット一覧</span></div>
+  <p class="lead">ジョブ全体で使うデータセットです。同じデータセット名（DSN）を、ステップをまたいで1行にまとめています。行を押すと、レイアウトと、どのステップがどう使うかが右に出ます。</p>
+  <div class="flowgrid">
+    <div class="panel scroll"><table>
+      <thead><tr><th>D</th><th>名称</th><th>データセット名</th><th>編成</th><th class="num">長さ</th><th>レイアウト</th><th>CRUD</th></tr></thead>
+      <tbody>${STORES.map(s => `<tr data-sel="D:${esc(s.id)}" class="${s.id === id ? "selrow" : ""}"><td class="mono">${s.no}</td><td>${esc(s.name)}</td><td class="mono" style="font-size:11.5px">${esc(s.id)}${s.gdg ? " (+1)" : ""}</td><td>${esc(s.kind || "—")}</td><td class="num">${s.lrecl || "—"}</td><td class="mono" style="font-size:11.5px">${s.layout ? esc(s.layout.origin === "program" ? s.layout.record : s.layout.origin) : "—"}</td><td class="mono" style="white-space:nowrap">${Object.entries(s.crudBy).map(([st, c]) => `${st}:${letters(c)}`).join(" ")}</td></tr>`).join("")}</tbody>
+    </table></div>
+    <aside class="panel detail" id="detail">${storeDetail(id)}</aside>
+  </div>`;
+};
+
+R.crud = () => {
+  const mode = state.crudMode, sel = state.selBy.crud;
+  let rows;
+  if (mode === "store") rows = STORES.map(s => ({ key: "D:" + s.id, head: `${s.no} ${s.name}`, cells: s.crudBy }));
+  else rows = LOG.filter(it => state.crudFilter === "all" || IC[it.id]).map(it => ({ key: "I:" + it.id, head: `${it.id} ${it.name}`, cells: Object.fromEntries(Object.entries(IC[it.id] || {}).map(([k, v]) => [k, v.crud])) }));
+  const table = `<table class="matrix"><thead><tr><th class="rowh">${mode === "store" ? "データセット" : "データ項目"}</th>${STEPS.map(s => `<th title="${esc(s.title)}"><span class="mono">${s.id}</span><br><span style="font-weight:400;font-size:11px">${esc(stepPgm(s))}</span></th>`).join("")}</tr></thead>
+    <tbody>${rows.map(r => `<tr class="${sel && sel.startsWith(r.key + "|") ? "selrow" : ""}"><td class="rowh"><button class="chip" data-go="${esc(r.key)}">${esc(r.head)}</button></td>${STEPS.map(s => { const c = r.cells[s.id] || ""; const k = `${r.key}|${s.id}`; return `<td class="${c ? "cell" : ""} ${sel === k ? "sel" : ""}" ${c ? `data-cell="${esc(k)}"` : ""}>${letters(c)}</td>`; }).join("")}</tr>`).join("")}</tbody></table>`;
+  return `<div class="viewhead"><h2>CRUD図</h2><span class="doctag">設計書でいうと：CRUD図（CRUDマトリクス）</span></div>
+  <p class="lead">行がデータ、列がステップです。データセット単位はプログラムの入出力文（READ=R、WRITE=C、REWRITE=U、DELETE=D、OPENのみ=O）とJCLから求めています。項目単位は、項目名を参照する行（R）と代入先になる行（U）から推定したもので、作成（C）はレコードを書くとき全項目に付けています。マスを押すと根拠が右に出ます。</p>
+  <div class="flowgrid">
+    <div class="panel">
+      <div class="toolbar filters">
+        <button class="btn" data-mode="store" aria-pressed="${mode === "store"}">データセット ${STORES.length}</button>
+        <button class="btn" data-mode="item" aria-pressed="${mode === "item"}">データ項目 ${LOG.length}</button>
+        ${mode === "item" ? `<label><input type="checkbox" id="onlyUsed" ${state.crudFilter === "used" ? "checked" : ""}> CRUDのある項目だけ</label>` : ""}
+      </div>
+      <div class="scroll" style="padding:12px">${table}</div>
+      <div class="legend"><span class="l-C" style="padding:0 6px">C 作成</span><span class="l-R" style="padding:0 6px">R 参照</span><span class="l-U" style="padding:0 6px">U 更新</span><span class="l-D" style="padding:0 6px">D 削除</span><span class="l-O" style="padding:0 6px">O 開閉のみ</span></div>
+    </div>
+    <aside class="panel detail" id="detail">${crudDetail(sel)}</aside>
+  </div>`;
+};
+function crudDetail(sel) {
+  if (!sel) return `<div class="dbody"><p style="color:var(--muted)">マスを押すと、そのステップがそのデータをどう扱うかの根拠（入出力文・JCL・代入している行）を表示します。</p></div>`;
+  const [rk, sid] = sel.split("|"), [t, id] = sp(rk), st = SB[sid];
+  if (t === "D") {
+    const d = st.dds.find(x => x.store === id);
+    return `<div class="dhead"><h3>${DB[id].no} ${esc(DB[id].name)} × ${sid}</h3><span class="orig">${esc(st.title)} · DD ${esc(d.dd)}</span></div><div class="dbody">
+      <p class="mono" style="font-size:16px">${letters(d.crud)}　${d.crud.split("").map(c => CRUD_TEXT[c]).join("・")}</p>
+      <div><button class="chip" data-go="S:${sid}">${sid} ${esc(st.title)}</button> <button class="chip" data-go="D:${esc(id)}">${DB[id].no} ${esc(DB[id].name)}</button></div>
+      ${ddEvidence(st, d)}</div>`;
+  }
+  const c = IC[id][sid], it = IB[id];
+  return `<div class="dhead"><h3>${id} ${esc(it.name)} × ${sid}</h3><span class="orig">${esc(st.title)}</span></div><div class="dbody">
+    <p class="mono" style="font-size:16px">${letters(c.crud)}　${c.crud.split("").map(x => CRUD_TEXT[x]).join("・")}（推定）</p>
+    <div class="scroll"><table><thead><tr><th>格納先</th><th>物理項目</th></tr></thead><tbody>${c.fields.map(fk => `<tr><td>${FIELDS[fk].store} ${esc(DNO[FIELDS[fk].store].name)}</td><td class="mono">${esc(FIELDS[fk].name)}</td></tr>`).join("")}</tbody></table></div>
+    ${c.crud.includes("C") ? `<p style="font-size:12.5px">C：このステップがレコードを書くので、レコードの全項目に付けています。</p>` : ""}
+    ${Object.entries(c.ev).map(([l, ls]) => `<b class="rh">${l}（${CRUD_TEXT[l]}）の根拠</b>` + srcOf(st.programSrc, mergeLines(ls))).join("")}
+    ${!st.programSrc ? `<p style="font-size:12.5px">ユーティリティのステップなので、レコード単位で全項目を扱うとしています。</p>` : ""}
+    <div><button class="chip" data-go="I:${id}">${id} ${esc(it.name)}</button> <button class="chip" data-go="S:${sid}">${sid} ${esc(st.title)}</button></div>
+  </div>`;
+}
+
+R.items = () => {
+  const [, iid] = sp(state.selBy.items), f = state.itemFilter;
+  const cnt = { all: LOG.length, multi: LOG.filter(i => new Set(i.fields.map(k => FIELDS[k].store)).size > 1).length, key: LOG.filter(i => i.isKey).length };
+  return `<div class="viewhead"><h2>データ項目定義</h2><span class="doctag">設計書でいうと：データ項目定義書（項目辞書）</span></div>
+  <p class="lead">データセットをまたいで、同じ意味の項目を1つのデータ項目（DI）にまとめています。例えば「カード番号」は日次取引・カード索引・取引マスターなどにあり、どのステップで作られ、どこで参照されるかを1行で追えます。</p>
+  <div class="flowgrid">
+    <div class="panel">
+      <div class="toolbar filters">
+        ${[["all", "全項目"], ["multi", "複数のデータセットにある"], ["key", "キー項目"]].map(([v, l]) => `<button class="btn" data-filter="${v}" aria-pressed="${f === v}">${l} ${cnt[v]}</button>`).join("")}
+        <input id="q" type="search" placeholder="項目名で絞り込む" aria-label="項目名で絞り込む">
+      </div>
+      <div class="scroll"><table>
+        <thead><tr><th>ID</th><th>データ項目</th><th>型</th><th>格納先</th>${STEPS.map(s => `<th class="mono">${s.id}</th>`).join("")}</tr></thead>
+        <tbody>${LOG.map(it => { const n = new Set(it.fields.map(k => FIELDS[k].store)).size; return `<tr data-sel="I:${it.id}" data-q="${esc((it.name + " " + it.fields.map(k => FIELDS[k].name).join(" ")).toLowerCase())}" data-multi="${n > 1}" data-key="${it.isKey}" class="${it.id === iid ? "selrow" : ""}"><td class="mono">${it.id}</td><td>${esc(it.name)}${it.isKey ? " " + pill("ok", "キー") : ""}</td><td class="mono">${it.pics.join(" / ")}</td><td class="mono">${[...new Set(it.fields.map(k => FIELDS[k].store))].join(" ")}</td>${STEPS.map(s => `<td class="mono">${letters(IC[it.id]?.[s.id]?.crud || "")}</td>`).join("")}</tr>`; }).join("")}</tbody>
+      </table></div>
+    </div>
+    <aside class="panel detail" id="detail">${itemDetail(iid)}</aside>
+  </div>`;
+};
+function applyItemFilter() {
+  const q = ($("#q")?.value || "").trim().toLowerCase(), f = state.itemFilter;
+  document.querySelectorAll("#main tr[data-q]").forEach(tr => {
+    const okF = f === "all" || (f === "multi" && tr.dataset.multi === "true") || (f === "key" && tr.dataset.key === "true");
+    tr.hidden = !(okF && (!q || tr.dataset.q.includes(q)));
+  });
+}
+
+R.coverage = () => `<div class="viewhead"><h2>網羅と未確認</h2><span class="doctag">設計書でいうと：レビュー記録・課題一覧</span></div>
+  <p class="lead">ソースとJCLを突き合わせた自動チェックの結果と、資料が足りず確認できていない事項です。自動チェックは、DD とプログラムの SELECT の食い違い、仮置きや推定の箇所、ジョブの外とやり取りするデータを挙げます。</p>
+  <div class="panel"><div class="dbody">
+    <b>自動チェック（${V.checks.length}件）</b>
+    <ul class="checks-list">${V.checks.map(c => `<li>${pill(c.level, c.level === "warn" ? "要確認" : "情報")}<span>${esc(c.text)} <button class="chip" data-go="${esc(c.target)}">開く</button></span></li>`).join("")}</ul>
+    <b>未確認事項</b>
+    <ol class="open-items">${V.openItems.map(x => `<li>${esc(x)}</li>`).join("")}</ol>
+    <b>プログラムビューワー</b>
+    <ul class="checks-list">${STEPS.filter(s => s.program).map(s => `<li>${s.viewer ? pill("ok", "あり") : pill("none", "未作成")}<span>${s.id} ${esc(s.program)} ${esc(s.title)}${s.viewer ? ` <a href="${esc(s.viewer)}" style="color:var(--accent)">開く</a>` : ""}</span></li>`).join("")}</ul>
+    <b>取り込んだソース</b>
+    <ul class="checks-list">${Object.entries(SRCS).map(([k, s]) => `<li>${pill("none", s.kind.toUpperCase())}<span class="mono" style="font-size:12px">${esc(s.path)}（${s.lines.length}行）</span></li>`).join("")}</ul>
+  </div></div>`;
+
+/* ---------- 画面ごとの操作 ---------- */
+function afterRender() {
+  if (state.view === "jobflow" || state.view === "dfd") document.querySelectorAll("#main svg [data-k]").forEach(g => g.addEventListener("click", () => { state.selBy[state.view] = g.dataset.k; render(); }));
+  if (state.view === "db" || state.view === "items") document.querySelectorAll("#main tr[data-sel]").forEach(tr => tr.addEventListener("click", (e) => { if (e.target.closest("[data-go]")) return; state.selBy[state.view] = tr.dataset.sel; render(); }));
+  if (state.view === "items") {
+    document.querySelectorAll("[data-filter]").forEach(b => b.addEventListener("click", () => { state.itemFilter = b.dataset.filter; document.querySelectorAll("[data-filter]").forEach(x => x.setAttribute("aria-pressed", x === b)); applyItemFilter(); }));
+    $("#q").addEventListener("input", applyItemFilter);
+    applyItemFilter();
+  }
+  if (state.view === "crud") {
+    document.querySelectorAll("[data-mode]").forEach(b => b.addEventListener("click", () => { state.crudMode = b.dataset.mode; state.selBy.crud = null; render(); }));
+    $("#onlyUsed")?.addEventListener("change", e => { state.crudFilter = e.target.checked ? "used" : "all"; render(); });
+    document.querySelectorAll("[data-cell]").forEach(td => td.addEventListener("click", () => { state.selBy.crud = td.dataset.cell; render(); }));
+  }
+}
+
+$("#h-title").textContent = V.meta.title;
+$("#h-pg").textContent = `${V.jobs.length}ジョブ · ${STEPS.length}ステップ · ${STORES.length}データセット`;
+startApp();
+</script>

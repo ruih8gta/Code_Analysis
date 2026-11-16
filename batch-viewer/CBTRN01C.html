@@ -1,0 +1,899 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body>
+<title>CBTRN01C バッチ設計</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* バッチ設計ビューワー共通スタイル。左に「読む順」、中央に図や一覧、右（狭い画面では下）に詳細と根拠コード */
+:root {
+  --bg: #f3f6f5;
+  --surface: #ffffff;
+  --sunken: #e9efed;
+  --ink: #182d31;
+  --muted: #55686d;
+  --line: #d3ddd9;
+  --accent: #106955;
+  --accent-soft: #dcf1e9;
+  --warn: #8a5300;
+  --warn-soft: #fbedd3;
+  --err: #a8322a;
+  --err-soft: #f9e2df;
+  --hl: #fff2a8;
+  --sans: "IBM Plex Sans JP", "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1a1c; --surface: #142427; --sunken: #0b1517; --ink: #e2ece9; --muted: #9db1b1;
+    --line: #29403f; --accent: #5cd0ad; --accent-soft: #123a31; --warn: #f0b45a; --warn-soft: #3a2b10;
+    --err: #ff8f84; --err-soft: #3c1b18; --hl: #4a4410; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1a1c; --surface: #142427; --sunken: #0b1517; --ink: #e2ece9; --muted: #9db1b1;
+  --line: #29403f; --accent: #5cd0ad; --accent-soft: #123a31; --warn: #f0b45a; --warn-soft: #3a2b10;
+  --err: #ff8f84; --err-soft: #3c1b18; --hl: #4a4410; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 14px; line-height: 1.6; }
+.wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 16px 40px; max-width: 1480px; margin: 0 auto; }
+header.top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; padding-bottom: 12px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+header.top h1 { font-size: 20px; margin: 0; text-wrap: balance; }
+header.top .pg { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+header.top .demo { margin-left: auto; font-size: 12px; color: var(--warn); background: var(--warn-soft); padding: 2px 10px; border-radius: 999px; }
+.layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }
+nav.rail { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); }
+nav.rail .cap { font-size: 11px; letter-spacing: .08em; color: var(--muted); margin: 0 0 8px; }
+nav.rail ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: s; }
+nav.rail button { all: unset; box-sizing: border-box; width: 100%; display: grid; grid-template-columns: 26px 1fr; gap: 2px 6px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+nav.rail button .n { font-family: var(--mono); font-size: 12px; color: var(--muted); grid-row: span 2; padding-top: 1px; }
+nav.rail button .t { font-weight: 500; }
+nav.rail button .d { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+nav.rail button:hover { background: var(--sunken); }
+nav.rail button[aria-current="true"] { background: var(--accent-soft); }
+nav.rail button[aria-current="true"] .n, nav.rail button[aria-current="true"] .t { color: var(--accent); }
+nav.rail button:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.railnote { margin-top: 14px; font-size: 11.5px; color: var(--muted); line-height: 1.5; border-top: 1px solid var(--line); padding-top: 10px; }
+main { min-width: 0; }
+.viewhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-bottom: 4px; }
+.viewhead h2 { margin: 0; font-size: 18px; }
+.doctag { font-size: 11.5px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 1px 8px; }
+.lead { color: var(--muted); margin: 0 0 16px; max-width: 72ch; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.pill { display: inline-block; font-size: 11.5px; padding: 1px 9px; border-radius: 999px; white-space: nowrap; font-weight: 500; }
+.pill.ok { background: var(--accent-soft); color: var(--accent); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.err { background: var(--err-soft); color: var(--err); }
+.pill.none { background: var(--sunken); color: var(--muted); }
+code, .mono { font-family: var(--mono); font-size: 12.5px; }
+
+/* 概要 */
+.checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.check { padding: 14px 16px; display: grid; gap: 6px; align-content: start; }
+.check h3 { margin: 0; font-size: 14px; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.check p { margin: 0; font-size: 13px; }
+.check .ev { font-size: 12px; color: var(--muted); }
+.summary { padding: 16px 18px; margin-bottom: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px 24px; }
+.summary div b { display: block; font-size: 11.5px; color: var(--muted); font-weight: 500; letter-spacing: .04em; }
+.summary div span { font-size: 15px; font-weight: 500; }
+
+/* 図 */
+.scroll { overflow-x: auto; }
+svg text { fill: var(--ink); font-family: var(--sans); }
+svg .sub { fill: var(--muted); font-size: 10.5px; font-family: var(--mono); }
+svg .lbl { fill: var(--muted); font-size: 11px; }
+svg .node { cursor: pointer; }
+svg .node .shape { fill: var(--surface); stroke: var(--ink); stroke-width: 1.3; }
+svg .node.warn .shape { fill: var(--warn-soft); stroke: var(--warn); }
+svg .node.err .shape { fill: var(--err-soft); stroke: var(--err); }
+svg .node.routine .shape { fill: var(--sunken); }
+svg .node:hover .shape { stroke-width: 2.2; }
+svg .node.sel .shape { stroke: var(--accent); stroke-width: 3; }
+svg .node.cur .shape { fill: var(--hl); stroke: var(--accent); stroke-width: 3; }
+svg .node.dim { opacity: .28; }
+svg .edge { fill: none; stroke: var(--muted); stroke-width: 1.4; }
+svg .edge.err { stroke: var(--err); }
+svg .edge.warn { stroke: var(--warn); }
+svg .edge.dash { stroke-dasharray: 5 4; }
+svg .edge.walked { stroke: var(--accent); stroke-width: 3; }
+svg .edge.dim { opacity: .2; }
+svg .ah { fill: var(--muted); }
+svg .note rect { fill: var(--warn-soft); stroke: var(--warn); stroke-dasharray: 4 3; }
+svg .note text { font-size: 11.5px; }
+svg .file rect { fill: var(--surface); stroke: var(--ink); stroke-width: 1.2; }
+svg .file.unused rect { stroke: var(--muted); stroke-dasharray: 4 3; fill: var(--sunken); }
+svg .file.unknown rect { stroke: var(--muted); stroke-dasharray: 2 3; fill: none; }
+svg .prog rect { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
+
+.flowgrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 440px); gap: 16px; align-items: start; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.toolbar label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--muted); padding: 8px 12px; border-top: 1px solid var(--line); }
+.legend i { display: inline-block; width: 22px; height: 12px; vertical-align: -1px; margin-right: 4px; border: 1.3px solid var(--ink); background: var(--surface); }
+.legend i.dec { transform: rotate(45deg) scale(.7); width: 12px; }
+.legend i.term { border-radius: 999px; }
+.legend i.pre { box-shadow: inset 4px 0 0 -2.6px var(--ink), inset -4px 0 0 -2.6px var(--ink); }
+.legend i.warn { background: var(--warn-soft); border-color: var(--warn); }
+.legend i.err { background: var(--err-soft); border-color: var(--err); }
+aside.detail { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); max-height: calc(100vh - 32px); overflow: auto; }
+.dhead { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); display: grid; gap: 4px; }
+.dhead h3 { margin: 0; font-size: 16px; }
+.dhead .orig { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.dbody { padding: 12px 16px 16px; display: grid; gap: 12px; }
+.dbody p { margin: 0; }
+.ranges { display: flex; flex-wrap: wrap; gap: 6px; }
+.ranges button { all: unset; cursor: pointer; font-family: var(--mono); font-size: 12px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 4px; }
+.ranges button:hover { border-color: var(--accent); color: var(--accent); }
+pre.src { margin: 0; background: var(--sunken); border-radius: 6px; padding: 8px 0; overflow-x: auto; font-family: var(--mono); font-size: 12px; line-height: 1.55; }
+pre.src .ln { display: block; padding: 0 10px 0 0; white-space: pre; }
+pre.src .ln span.no { display: inline-block; width: 40px; text-align: right; color: var(--muted); padding-right: 10px; user-select: none; }
+pre.src .ln.cm { color: var(--muted); }
+.src-gap { display: block; color: var(--muted); padding-left: 50px; font-size: 11px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+th { font-size: 11.5px; color: var(--muted); font-weight: 500; letter-spacing: .04em; white-space: nowrap; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tr.diff td { background: var(--warn-soft); }
+.callout { background: var(--warn-soft); border-left: 3px solid var(--warn); padding: 8px 12px; border-radius: 0 6px 6px 0; font-size: 13px; }
+
+/* トレース */
+.trace { display: grid; gap: 10px; }
+.tctl { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.tctl select { font: inherit; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+.btn { font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.btn:disabled { opacity: .4; cursor: default; }
+.stepinfo { font-size: 13px; }
+.ws { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 12.5px; background: var(--sunken); padding: 8px 12px; border-radius: 6px; }
+.ws dt { color: var(--muted); }
+.ws dd { margin: 0; font-family: var(--mono); }
+.ws dd.chg { background: var(--hl); }
+.log { background: var(--sunken); border-radius: 6px; padding: 8px 10px; font-family: var(--mono); font-size: 11.5px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+.log .new { background: var(--hl); }
+.log .dup { color: var(--warn); }
+
+/* 入出力 */
+.chain { padding: 14px 16px; margin-top: 16px; }
+.chain h3 { margin: 0 0 8px; font-size: 14px; }
+.io-unused td { color: var(--muted); }
+
+/* 網羅 */
+.strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(5px, 1fr)); gap: 1px; padding: 12px; }
+.strip span { height: 14px; border-radius: 1px; background: var(--sunken); cursor: pointer; }
+.strip span.c-flow { background: var(--accent); }
+.strip span.c-gap { background: var(--err); }
+.strip span.c-def { background: var(--line); }
+.strip span.c-cm { background: var(--sunken); }
+.cov { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.cov .panel { padding: 12px 14px; }
+.cov b { font-size: 22px; font-variant-numeric: tabular-nums; }
+.cov small { display: block; color: var(--muted); font-size: 12px; }
+.bar { height: 6px; background: var(--sunken); border-radius: 3px; margin-top: 6px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--accent); }
+.paras { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px; }
+.open-items { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.section-gap { height: 16px; }
+
+.chip { all: unset; box-sizing: border-box; cursor: pointer; font-size: 12px; padding: 1px 8px; border-radius: 4px; border: 1px solid var(--line); background: var(--surface); line-height: 1.6; white-space: nowrap; }
+.chip:hover { border-color: var(--accent); color: var(--accent); }
+.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rel { display: grid; gap: 6px; padding: 10px 12px; background: var(--sunken); border-radius: 8px; }
+.rh { font-size: 12px; color: var(--muted); font-weight: 500; display: block; margin-bottom: 4px; }
+.relrow { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 8px; align-items: start; }
+.relrow .rl { font-size: 12px; color: var(--muted); padding-top: 2px; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.chips .none { font-size: 12px; color: var(--muted); }
+details.more { width: 100%; font-size: 12px; }
+details.more summary { cursor: pointer; color: var(--accent); }
+details.more[open] { display: flex; flex-wrap: wrap; gap: 4px; }
+tbody tr[data-sel] { cursor: pointer; }
+tbody tr[data-sel]:hover td { background: var(--sunken); }
+tr.selrow td, tr.selrow:hover td { background: var(--accent-soft); }
+.pill.rec { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.docmap { padding: 14px 16px; margin-bottom: 16px; }
+.dm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.dm button { all: unset; box-sizing: border-box; cursor: pointer; padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; display: grid; background: var(--surface); }
+.dm button b { font-size: 13px; }
+.dm button span { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+.dm button:hover { border-color: var(--accent); }
+.dm button:focus-visible { outline: 2px solid var(--accent); }
+.dm .ar { font-size: 10.5px; color: var(--muted); text-align: center; line-height: 1.3; }
+.dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; font-size: 13px; margin: 0; }
+.dl dt { color: var(--muted); }
+.dl dd { margin: 0; }
+.lay rect { stroke: var(--surface); stroke-width: 1; cursor: pointer; }
+.lay .u-ok { fill: var(--accent); }
+.lay .u-rec { fill: var(--accent-soft); }
+.lay .u-none { fill: var(--line); }
+.lay .u-fill { fill: var(--sunken); }
+.lay rect:hover { stroke: var(--ink); }
+.filters input { font: inherit; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); width: 200px; max-width: 100%; }
+.filters .btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.dfd g[data-k] { cursor: pointer; }
+.dfd .shape { fill: var(--surface); stroke: var(--ink); stroke-width: 1.4; }
+.dfd .store .bg { fill: var(--surface); }
+.dfd .store .sl { stroke: var(--ink); stroke-width: 1.4; }
+.dfd .store.unused .sl { stroke: var(--muted); stroke-dasharray: 4 3; }
+.dfd .store.unused text { fill: var(--muted); }
+.dfd .fl { stroke: var(--muted); stroke-width: 1.4; }
+.dfd .fl.est { stroke-dasharray: 5 4; }
+.dfd .hit { stroke: transparent; stroke-width: 16; }
+.dfd .flab { font-size: 11.5px; paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
+.dfd .flow.on .fl { stroke: var(--accent); stroke-width: 2.6; }
+.dfd .flow.on .flab, .dfd .flow.sel .flab { fill: var(--accent); font-weight: 700; }
+.dfd .rel .shape, .dfd .rel .sl { stroke: var(--accent); }
+.dfd .sel .shape, .dfd .sel .sl { stroke: var(--accent); stroke-width: 3; }
+.dfd .sel .shape { fill: var(--accent-soft); }
+.dfd g[data-k]:hover .shape, .dfd g[data-k]:hover .sl { stroke-width: 2.4; }
+
+@media (max-width: 1100px) {
+  .flowgrid { grid-template-columns: minmax(0, 1fr); }
+  aside.detail { position: static; max-height: none; }
+}
+@media (max-width: 760px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  nav.rail { position: static; }
+  nav.rail ol { grid-auto-flow: column; grid-auto-columns: max-content; overflow-x: auto; padding-bottom: 4px; }
+  nav.rail button { grid-template-columns: auto auto; }
+  nav.rail button .d { display: none; }
+  nav.rail button .n { grid-row: auto; }
+  .railnote { display: none; }
+  header.top .demo { margin-left: 0; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  svg .node .shape, svg .edge { transition: stroke-width .15s, opacity .2s, fill .2s; }
+}
+
+header.top a.uplink { font-size: 12.5px; color: var(--accent); text-decoration: none; border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
+header.top a.uplink:hover { border-color: var(--accent); }
+table.matrix { width: auto; border-collapse: collapse; font-size: 12.5px; }
+table.matrix th, table.matrix td { border: 1px solid var(--line); padding: 4px 8px; text-align: center; }
+table.matrix th.rowh, table.matrix td.rowh { text-align: left; white-space: nowrap; }
+table.matrix thead th { vertical-align: bottom; min-width: 64px; }
+table.matrix td.cell { font-family: var(--mono); font-weight: 500; cursor: pointer; min-width: 52px; }
+table.matrix td.cell:hover { outline: 2px solid var(--accent); outline-offset: -2px; }
+table.matrix td.cell.sel { outline: 3px solid var(--accent); outline-offset: -3px; }
+table.matrix tr.selrow td.rowh { background: var(--accent-soft); }
+.l-C { background: var(--accent-soft); color: var(--accent); }
+.l-U { background: var(--warn-soft); color: var(--warn); }
+.l-D { background: var(--err-soft); color: var(--err); }
+.l-R { color: var(--ink); }
+.l-O { color: var(--muted); }
+svg .jobframe { fill: none; stroke: var(--line); stroke-width: 1.4; stroke-dasharray: 6 4; }
+svg .stepbox { cursor: pointer; }
+svg .stepbox .shape { fill: var(--surface); stroke: var(--ink); stroke-width: 1.4; }
+svg .stepbox.assumed .shape { stroke-dasharray: 5 4; }
+svg .stepbox.sel .shape { stroke: var(--accent); stroke-width: 3; fill: var(--accent-soft); }
+svg .stepbox:hover .shape { stroke-width: 2.4; }
+.checks-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.checks-list li { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: start; font-size: 13px; }
+.checks-list button { all: unset; cursor: pointer; }
+.checks-list button:hover { color: var(--accent); }
+.flowgrid.stack { grid-template-columns: minmax(0, 1fr); }
+.flowgrid.stack aside.detail { position: static; max-height: none; }
+.lay { max-width: 640px; }
+
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <h1 id="h-title"></h1>
+    <span class="pg" id="h-pg"></span>
+    <span class="demo" id="h-link"></span>
+  </header>
+  <div class="layout">
+    <nav class="rail" aria-label="読む順">
+      <p class="cap">読む順</p>
+      <ol id="rail"></ol>
+      <p class="railnote">上から順に読むと、目的 → データ → 骨格 → 例外 → 細部の順で理解できます。<br>共通ID：P プロセス、F データフロー、D データストア、DI データ項目。</p>
+    </nav>
+    <main id="main"></main>
+  </div>
+</div>
+
+<script>
+const V = {"kind":"program","schema":"batch-design-viewer/program-model@1","meta":{"program":"CBTRN01C","title":"日次取引のカード・口座照合","type":"BATCH COBOL","lines":494,"source":"original/CBTRN01C.cbl","sha256":"55c2aebd59528aa42b28878ba5ca4d17a00b3548fc25e4ce1529710d366fd576"},"links":{"job":{"href":"daily-job.html","label":"ジョブ全体を見る"}},"source":["      ******************************************************************","      * Program     : CBTRN01C.CBL                                      ","      * Application : CardDemo                                          ","      * Type        : BATCH COBOL Program                                ","      * Function    : Post the records from daily transaction file.     ","      ******************************************************************","      * Copyright Amazon.com, Inc. or its affiliates.                   ","      * All Rights Reserved.                                            ","      *                                                                 ","      * Licensed under the Apache License, Version 2.0 (the \"License\"). ","      * You may not use this file except in compliance with the License.","      * You may obtain a copy of the License at                         ","      *                                                                 ","      *    http://www.apache.org/licenses/LICENSE-2.0                   ","      *                                                                 ","      * Unless required by applicable law or agreed to in writing,      ","      * software distributed under the License is distributed on an     ","      * \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,    ","      * either express or implied. See the License for the specific     ","      * language governing permissions and limitations under the License","      ******************************************************************","       IDENTIFICATION DIVISION.","       PROGRAM-ID.    CBTRN01C.","       AUTHOR.        AWS.","","       ENVIRONMENT DIVISION.","       INPUT-OUTPUT SECTION.","       FILE-CONTROL.","           SELECT DALYTRAN-FILE ASSIGN TO DALYTRAN","                  ORGANIZATION IS SEQUENTIAL","                  ACCESS MODE  IS SEQUENTIAL","                  FILE STATUS  IS DALYTRAN-STATUS.","","           SELECT CUSTOMER-FILE ASSIGN TO   CUSTFILE","                  ORGANIZATION IS INDEXED","                  ACCESS MODE  IS RANDOM","                  RECORD KEY   IS FD-CUST-ID","                  FILE STATUS  IS CUSTFILE-STATUS.","","           SELECT XREF-FILE ASSIGN TO   XREFFILE","                  ORGANIZATION IS INDEXED","                  ACCESS MODE  IS RANDOM","                  RECORD KEY   IS FD-XREF-CARD-NUM","                  FILE STATUS  IS XREFFILE-STATUS.","","           SELECT CARD-FILE ASSIGN TO   CARDFILE","                  ORGANIZATION IS INDEXED","                  ACCESS MODE  IS RANDOM","                  RECORD KEY   IS FD-CARD-NUM","                  FILE STATUS  IS CARDFILE-STATUS.","","           SELECT ACCOUNT-FILE ASSIGN TO   ACCTFILE","                  ORGANIZATION IS INDEXED","                  ACCESS MODE  IS RANDOM","                  RECORD KEY   IS FD-ACCT-ID","                  FILE STATUS  IS ACCTFILE-STATUS.","","           SELECT TRANSACT-FILE ASSIGN TO   TRANFILE","                  ORGANIZATION IS INDEXED","                  ACCESS MODE  IS RANDOM","                  RECORD KEY   IS FD-TRANS-ID","                  FILE STATUS  IS TRANFILE-STATUS.","      *","       DATA DIVISION.","       FILE SECTION.","       FD  DALYTRAN-FILE.","       01  FD-TRAN-RECORD.","           05 FD-TRAN-ID                        PIC X(16).","           05 FD-CUST-DATA                      PIC X(334).","","       FD  CUSTOMER-FILE.","       01  FD-CUSTFILE-REC.","           05 FD-CUST-ID                        PIC 9(09).","           05 FD-CUST-DATA                      PIC X(491).","","       FD  XREF-FILE.","       01  FD-XREFFILE-REC.","           05 FD-XREF-CARD-NUM                  PIC X(16).","           05 FD-XREF-DATA                      PIC X(34).","","       FD  CARD-FILE.","       01  FD-CARDFILE-REC.","           05 FD-CARD-NUM                       PIC X(16).","           05 FD-CARD-DATA                      PIC X(134).","","       FD  ACCOUNT-FILE.","       01  FD-ACCTFILE-REC.","           05 FD-ACCT-ID                        PIC 9(11).","           05 FD-ACCT-DATA                      PIC X(289).","","       FD  TRANSACT-FILE.","       01  FD-TRANFILE-REC.","           05 FD-TRANS-ID                       PIC X(16).","           05 FD-ACCT-DATA                      PIC X(334).","","       WORKING-STORAGE SECTION.","","      *****************************************************************","       COPY CVTRA06Y.","       01  DALYTRAN-STATUS.","           05  DALYTRAN-STAT1      PIC X.","           05  DALYTRAN-STAT2      PIC X.","","       COPY CVCUS01Y.","       01  CUSTFILE-STATUS.","           05  CUSTFILE-STAT1      PIC X.","           05  CUSTFILE-STAT2      PIC X.","","       COPY CVACT03Y.","       01  XREFFILE-STATUS.","           05  XREFFILE-STAT1      PIC X.","           05  XREFFILE-STAT2      PIC X.","","       COPY CVACT02Y.","       01  CARDFILE-STATUS.","           05  CARDFILE-STAT1      PIC X.","           05  CARDFILE-STAT2      PIC X.","","       COPY CVACT01Y.","       01  ACCTFILE-STATUS.","           05  ACCTFILE-STAT1      PIC X.","           05  ACCTFILE-STAT2      PIC X.","","       COPY CVTRA05Y.","       01  TRANFILE-STATUS.","           05  TRANFILE-STAT1      PIC X.","           05  TRANFILE-STAT2      PIC X.","","       01  IO-STATUS.","           05  IO-STAT1            PIC X.","           05  IO-STAT2            PIC X.","","       01  TWO-BYTES-BINARY        PIC 9(4) BINARY.","       01  TWO-BYTES-ALPHA         REDEFINES TWO-BYTES-BINARY.","           05  TWO-BYTES-LEFT      PIC X.","           05  TWO-BYTES-RIGHT     PIC X.","","       01  IO-STATUS-04.","           05  IO-STATUS-0401      PIC 9   VALUE 0.","           05  IO-STATUS-0403      PIC 999 VALUE 0.","","       01  APPL-RESULT             PIC S9(9)   COMP.","           88  APPL-AOK            VALUE 0.","           88  APPL-EOF            VALUE 16.","","       01  END-OF-DAILY-TRANS-FILE             PIC X(01)    VALUE 'N'.","       01  ABCODE                  PIC S9(9) BINARY.","       01  TIMING                  PIC S9(9) BINARY.","       01  WS-MISC-VARIABLES.","           05 WS-XREF-READ-STATUS  PIC 9(04).","           05 WS-ACCT-READ-STATUS  PIC 9(04).","","      *****************************************************************","       PROCEDURE DIVISION.","       MAIN-PARA.","           DISPLAY 'START OF EXECUTION OF PROGRAM CBTRN01C'.","           PERFORM 0000-DALYTRAN-OPEN.","           PERFORM 0100-CUSTFILE-OPEN.","           PERFORM 0200-XREFFILE-OPEN.","           PERFORM 0300-CARDFILE-OPEN.","           PERFORM 0400-ACCTFILE-OPEN.","           PERFORM 0500-TRANFILE-OPEN.","","           PERFORM UNTIL END-OF-DAILY-TRANS-FILE = 'Y'","               IF  END-OF-DAILY-TRANS-FILE = 'N'","                   PERFORM 1000-DALYTRAN-GET-NEXT","                   IF  END-OF-DAILY-TRANS-FILE = 'N'","                       DISPLAY DALYTRAN-RECORD","                   END-IF","                   MOVE 0                 TO WS-XREF-READ-STATUS","                   MOVE DALYTRAN-CARD-NUM TO XREF-CARD-NUM","                   PERFORM 2000-LOOKUP-XREF","                   IF WS-XREF-READ-STATUS = 0","                     MOVE 0            TO WS-ACCT-READ-STATUS","                     MOVE XREF-ACCT-ID TO ACCT-ID","                     PERFORM 3000-READ-ACCOUNT","                     IF WS-ACCT-READ-STATUS NOT = 0","                         DISPLAY 'ACCOUNT ' ACCT-ID ' NOT FOUND'","                     END-IF","                   ELSE","                     DISPLAY 'CARD NUMBER ' DALYTRAN-CARD-NUM","                     ' COULD NOT BE VERIFIED. SKIPPING TRANSACTION ID-'","                     DALYTRAN-ID","                   END-IF","               END-IF","           END-PERFORM.","","           PERFORM 9000-DALYTRAN-CLOSE.","           PERFORM 9100-CUSTFILE-CLOSE.","           PERFORM 9200-XREFFILE-CLOSE.","           PERFORM 9300-CARDFILE-CLOSE.","           PERFORM 9400-ACCTFILE-CLOSE.","           PERFORM 9500-TRANFILE-CLOSE.","","           DISPLAY 'END OF EXECUTION OF PROGRAM CBTRN01C'.","","           GOBACK.","","      *****************************************************************","      * READS FILE                                                    *","      *****************************************************************","       1000-DALYTRAN-GET-NEXT.","           READ DALYTRAN-FILE INTO DALYTRAN-RECORD.","           IF  DALYTRAN-STATUS = '00'","               MOVE 0 TO APPL-RESULT","           ELSE","               IF  DALYTRAN-STATUS = '10'","                   MOVE 16 TO APPL-RESULT","               ELSE","                   MOVE 12 TO APPL-RESULT","               END-IF","           END-IF","           IF  APPL-AOK","               CONTINUE","           ELSE","               IF  APPL-EOF","                   MOVE 'Y' TO END-OF-DAILY-TRANS-FILE","               ELSE","                   DISPLAY 'ERROR READING DAILY TRANSACTION FILE'","                   MOVE DALYTRAN-STATUS TO IO-STATUS","                   PERFORM Z-DISPLAY-IO-STATUS","                   PERFORM Z-ABEND-PROGRAM","               END-IF","           END-IF","           EXIT.","      *---------------------------------------------------------------*","       2000-LOOKUP-XREF.","           MOVE XREF-CARD-NUM TO FD-XREF-CARD-NUM","           READ XREF-FILE  RECORD INTO CARD-XREF-RECORD","           KEY IS FD-XREF-CARD-NUM","                INVALID KEY","                  DISPLAY 'INVALID CARD NUMBER FOR XREF'","                  MOVE 4 TO WS-XREF-READ-STATUS","                NOT INVALID KEY","                  DISPLAY 'SUCCESSFUL READ OF XREF'","                  DISPLAY 'CARD NUMBER: ' XREF-CARD-NUM","                  DISPLAY 'ACCOUNT ID : ' XREF-ACCT-ID","                  DISPLAY 'CUSTOMER ID: ' XREF-CUST-ID","           END-READ.","      *---------------------------------------------------------------*","       3000-READ-ACCOUNT.","           MOVE ACCT-ID TO FD-ACCT-ID","           READ ACCOUNT-FILE RECORD INTO ACCOUNT-RECORD","           KEY IS FD-ACCT-ID","                INVALID KEY","                  DISPLAY 'INVALID ACCOUNT NUMBER FOUND'","                  MOVE 4 TO WS-ACCT-READ-STATUS","                NOT INVALID KEY","                  DISPLAY 'SUCCESSFUL READ OF ACCOUNT FILE'","           END-READ.","      *---------------------------------------------------------------*","       0000-DALYTRAN-OPEN.","           MOVE 8 TO APPL-RESULT.","           OPEN INPUT DALYTRAN-FILE","           IF  DALYTRAN-STATUS = '00'","               MOVE 0 TO APPL-RESULT","           ELSE","               MOVE 12 TO APPL-RESULT","           END-IF","           IF  APPL-AOK","               CONTINUE","           ELSE","               DISPLAY 'ERROR OPENING DAILY TRANSACTION FILE'","               MOVE DALYTRAN-STATUS TO IO-STATUS","               PERFORM Z-DISPLAY-IO-STATUS","               PERFORM Z-ABEND-PROGRAM","           END-IF","           EXIT.","","      *---------------------------------------------------------------*","       0100-CUSTFILE-OPEN.","           MOVE 8 TO APPL-RESULT.","           OPEN INPUT CUSTOMER-FILE","           IF  CUSTFILE-STATUS = '00'","               MOVE 0 TO APPL-RESULT","           ELSE","               MOVE 12 TO APPL-RESULT","           END-IF","           IF  APPL-AOK","               CONTINUE","           ELSE","               DISPLAY 'ERROR OPENING CUSTOMER FILE'","               MOVE CUSTFILE-STATUS TO IO-STATUS","               PERFORM Z-DISPLAY-IO-STATUS","               PERFORM Z-ABEND-PROGRAM","           END-IF","           EXIT.","      *---------------------------------------------------------------*","       0200-XREFFILE-OPEN.","           MOVE 8 TO APPL-RESULT.","           OPEN INPUT XREF-FILE","           IF  XREFFILE-STATUS = '00'","               MOVE 0 TO APPL-RESULT","           ELSE","               MOVE 12 TO APPL-RESULT","           END-IF","           IF  APPL-AOK","               CONTINUE","           ELSE","               DISPLAY 'ERROR OPENING CROSS REF FILE'","               MOVE XREFFILE-STATUS TO IO-STATUS","               PERFORM Z-DISPLAY-IO-STATUS","               PERFORM Z-ABEND-PROGRAM","           END-IF","           EXIT.","      *---------------------------------------------------------------*","       0300-CARDFILE-OPEN.","           MOVE 8 TO APPL-RESULT.","           OPEN INPUT CARD-FILE","           IF  CARDFILE-STATUS = '00'","               MOVE 0 TO APPL-RESULT","           ELSE","               MOVE 12 TO APPL-RESULT","           END-IF","           IF  APPL-AOK","               CONTINUE","           ELSE","               DISPLAY 'ERROR OPENING CARD FILE'","               MOVE CARDFILE-STATUS TO IO-STATUS","               PERFORM Z-DISPLAY-IO-STATUS","               PERFORM Z-ABEND-PROGRAM","           END-IF","           EXIT.","      *---------------------------------------------------------------*","       0400-ACCTFILE-OPEN.","           MOVE 8 TO APPL-RESULT.","           OPEN INPUT ACCOUNT-FILE","           IF  ACCTFILE-STATUS = '00'","               MOVE 0 TO APPL-RESULT","           ELSE","               MOVE 12 TO APPL-RESULT","           END-IF","           IF  APPL-AOK","               CONTINUE","           ELSE","               DISPLAY 'ERROR OPENING ACCOUNT FILE'","               MOVE ACCTFILE-STATUS TO IO-STATUS","               PERFORM Z-DISPLAY-IO-STATUS","               PERFORM Z-ABEND-PROGRAM","           END-IF","           EXIT.","      *---------------------------------------------------------------*","       0500-TRANFILE-OPEN.","           MOVE 8 TO APPL-RESULT.","           OPEN INPUT TRANSACT-FILE","           IF  TRANFILE-STATUS = '00'","               MOVE 0 TO APPL-RESULT","           ELSE","               MOVE 12 TO APPL-RESULT","           END-IF","           IF  APPL-AOK","               CONTINUE","           ELSE","               DISPLAY 'ERROR OPENING TRANSACTION FILE'","               MOVE TRANFILE-STATUS TO IO-STATUS","               PERFORM Z-DISPLAY-IO-STATUS","               PERFORM Z-ABEND-PROGRAM","           END-IF","           EXIT.","      *---------------------------------------------------------------*","       9000-DALYTRAN-CLOSE.","           ADD 8 TO ZERO GIVING APPL-RESULT.","           CLOSE DALYTRAN-FILE","           IF  DALYTRAN-STATUS = '00'","               MOVE 0 TO APPL-RESULT","           ELSE","               MOVE 12 TO APPL-RESULT","           END-IF","           IF  APPL-AOK","               CONTINUE","           ELSE","               DISPLAY 'ERROR CLOSING CUSTOMER FILE'","               MOVE CUSTFILE-STATUS TO IO-STATUS","               PERFORM Z-DISPLAY-IO-STATUS","               PERFORM Z-ABEND-PROGRAM","           END-IF","           EXIT.","      *---------------------------------------------------------------*","       9100-CUSTFILE-CLOSE.","           ADD 8 TO ZERO GIVING APPL-RESULT.","           CLOSE CUSTOMER-FILE","           IF  CUSTFILE-STATUS = '00'","               MOVE 0 TO APPL-RESULT","           ELSE","               MOVE 12 TO APPL-RESULT","           END-IF","           IF  APPL-AOK","               CONTINUE","           ELSE","               DISPLAY 'ERROR CLOSING CUSTOMER FILE'","               MOVE CUSTFILE-STATUS TO IO-STATUS","               PERFORM Z-DISPLAY-IO-STATUS","               PERFORM Z-ABEND-PROGRAM","           END-IF","           EXIT.","      *---------------------------------------------------------------*","       9200-XREFFILE-CLOSE.","           ADD 8 TO ZERO GIVING APPL-RESULT.","           CLOSE XREF-FILE","           IF  XREFFILE-STATUS = '00'","               MOVE 0 TO APPL-RESULT","           ELSE","               MOVE 12 TO APPL-RESULT","           END-IF","           IF  APPL-AOK","               CONTINUE","           ELSE","               DISPLAY 'ERROR CLOSING CROSS REF FILE'","               MOVE XREFFILE-STATUS TO IO-STATUS","               PERFORM Z-DISPLAY-IO-STATUS","               PERFORM Z-ABEND-PROGRAM","           END-IF","           EXIT.","      *---------------------------------------------------------------*","       9300-CARDFILE-CLOSE.","           ADD 8 TO ZERO GIVING APPL-RESULT.","           CLOSE CARD-FILE","           IF  CARDFILE-STATUS = '00'","               MOVE 0 TO APPL-RESULT","           ELSE","               MOVE 12 TO APPL-RESULT","           END-IF","           IF  APPL-AOK","               CONTINUE","           ELSE","               DISPLAY 'ERROR CLOSING CARD FILE'","               MOVE CARDFILE-STATUS TO IO-STATUS","               PERFORM Z-DISPLAY-IO-STATUS","               PERFORM Z-ABEND-PROGRAM","           END-IF","           EXIT.","      *---------------------------------------------------------------*","       9400-ACCTFILE-CLOSE.","           ADD 8 TO ZERO GIVING APPL-RESULT.","           CLOSE ACCOUNT-FILE","           IF  ACCTFILE-STATUS = '00'","               MOVE 0 TO APPL-RESULT","           ELSE","               MOVE 12 TO APPL-RESULT","           END-IF","           IF  APPL-AOK","               CONTINUE","           ELSE","               DISPLAY 'ERROR CLOSING ACCOUNT FILE'","               MOVE ACCTFILE-STATUS TO IO-STATUS","               PERFORM Z-DISPLAY-IO-STATUS","               PERFORM Z-ABEND-PROGRAM","           END-IF","           EXIT.","      *---------------------------------------------------------------*","       9500-TRANFILE-CLOSE.","           ADD 8 TO ZERO GIVING APPL-RESULT.","           CLOSE TRANSACT-FILE","           IF  TRANFILE-STATUS = '00'","               MOVE 0 TO APPL-RESULT","           ELSE","               MOVE 12 TO APPL-RESULT","           END-IF","           IF  APPL-AOK","               CONTINUE","           ELSE","               DISPLAY 'ERROR CLOSING TRANSACTION FILE'","               MOVE TRANFILE-STATUS TO IO-STATUS","               PERFORM Z-DISPLAY-IO-STATUS","               PERFORM Z-ABEND-PROGRAM","           END-IF","           EXIT.","","       Z-ABEND-PROGRAM.","           DISPLAY 'ABENDING PROGRAM'","           MOVE 0 TO TIMING","           MOVE 999 TO ABCODE","           CALL 'CEE3ABD' USING ABCODE, TIMING.","","      *****************************************************************","       Z-DISPLAY-IO-STATUS.","           IF  IO-STATUS NOT NUMERIC","           OR  IO-STAT1 = '9'","               MOVE IO-STAT1 TO IO-STATUS-04(1:1)","               MOVE 0        TO TWO-BYTES-BINARY","               MOVE IO-STAT2 TO TWO-BYTES-RIGHT","               MOVE TWO-BYTES-BINARY TO IO-STATUS-0403","               DISPLAY 'FILE STATUS IS: NNNN' IO-STATUS-04","           ELSE","               MOVE '0000' TO IO-STATUS-04","               MOVE IO-STATUS TO IO-STATUS-04(3:2)","               DISPLAY 'FILE STATUS IS: NNNN' IO-STATUS-04","           END-IF","           EXIT.","","","      *","      * Ver: CardDemo_v2.0-25-gdb72e6b-235 Date: 2025-04-29 11:01:28 CDT","      *"],"paragraphs":[{"name":"MAIN-PARA","start":155,"end":197},{"name":"1000-DALYTRAN-GET-NEXT","start":202,"end":225},{"name":"2000-LOOKUP-XREF","start":227,"end":239},{"name":"3000-READ-ACCOUNT","start":241,"end":250},{"name":"0000-DALYTRAN-OPEN","start":252,"end":268},{"name":"0100-CUSTFILE-OPEN","start":271,"end":287},{"name":"0200-XREFFILE-OPEN","start":289,"end":305},{"name":"0300-CARDFILE-OPEN","start":307,"end":323},{"name":"0400-ACCTFILE-OPEN","start":325,"end":341},{"name":"0500-TRANFILE-OPEN","start":343,"end":359},{"name":"9000-DALYTRAN-CLOSE","start":361,"end":377},{"name":"9100-CUSTFILE-CLOSE","start":379,"end":395},{"name":"9200-XREFFILE-CLOSE","start":397,"end":413},{"name":"9300-CARDFILE-CLOSE","start":415,"end":431},{"name":"9400-ACCTFILE-CLOSE","start":433,"end":449},{"name":"9500-TRANFILE-CLOSE","start":451,"end":467},{"name":"Z-ABEND-PROGRAM","start":469,"end":473},{"name":"Z-DISPLAY-IO-STATUS","start":476,"end":489}],"procedureLine":154,"overview":{"summary":[["目的","日次取引のカード番号と口座の存在を確認する"],["処理単位","日次取引1件ごと"],["入力","6ファイル（実際に読むのは3つ）"],["出力","標準出力のみ。ファイル更新なし"],["異常時","ABEND 999"]],"checks":[{"title":"起動条件・タイミング","status":"none","label":"未確認","text":"日次で動く前提だが、起動時刻・前後のジョブ・カレンダーはJCLやジョブ定義が無いため分からない。","evidence":"JCL未入手"},{"title":"入力","status":"ok","label":"根拠あり","text":"日次取引を先頭から順に読み、カード索引と口座マスターをキーで引く。顧客・カード・取引の3ファイルは開くだけで読まない。","evidence":"29〜63行, 157〜162行"},{"title":"処理内容","status":"ok","label":"根拠あり","text":"カード番号 → 口座ID → 口座マスターの順に存在を確認する。金額の計算や更新はしない。","evidence":"164〜186行"},{"title":"出力","status":"warn","label":"要確認","text":"結果は DISPLAY で標準出力に出るだけ。照合結果を後続処理が使うのか、誰が見るのかは不明。","evidence":"168, 178, 181行"},{"title":"異常時の動作","status":"ok","label":"根拠あり","text":"OPEN・読込・CLOSEの失敗でアベンド999。カード・口座の未登録はメッセージを出して続行する。","evidence":"例外と異常系を参照"},{"title":"再実行","status":"warn","label":"推定","text":"ファイルを更新しないので、同じ入力で再実行しても副作用はないと考えられる。運用上の手順は未確認。","evidence":"更新文なし"},{"title":"件数・処理時間","status":"none","label":"未確認","text":"処理件数の集計や出力は無い。想定件数・処理時間の要件は資料が無い。","evidence":"—"},{"title":"読み違えやすい点","status":"warn","label":"要確認","text":"EOFのとき最後の1件をもう一度照合する。空入力でも照合が1回走る。","evidence":"166〜185行"}]},"context":{"prev":{"label":"前のジョブ","sub":"JCL未入手"},"next":{"label":"次のジョブ","sub":"JCL未入手"},"outputs":[{"name":"標準出力（SYSOUT）","sub":"照合結果・エラー"}],"note":"顧客・カード・取引の3ファイルは、開いて閉じるだけで一度も読みません。後の改修で使わなくなった名残か、別の理由があるのかは未確認です。移行時にこの3ファイルを残すかどうかの判断材料になります。"},"stores":[{"dd":"DALYTRAN","no":"D1","name":"日次取引","nodes":["open","read","rres","eof","close"],"org":"順次","access":"順次","key":"—","len":350,"cb":"CVTRA06Y","crud":"R","src":[[29,32],[66,69],[99,99]],"record":"DALYTRAN-RECORD","fields":["DALYTRAN.DALYTRAN-ID","DALYTRAN.DALYTRAN-TYPE-CD","DALYTRAN.DALYTRAN-CAT-CD","DALYTRAN.DALYTRAN-SOURCE","DALYTRAN.DALYTRAN-DESC","DALYTRAN.DALYTRAN-AMT","DALYTRAN.DALYTRAN-MERCHANT-ID","DALYTRAN.DALYTRAN-MERCHANT-NAME","DALYTRAN.DALYTRAN-MERCHANT-CITY","DALYTRAN.DALYTRAN-MERCHANT-ZIP","DALYTRAN.DALYTRAN-CARD-NUM","DALYTRAN.DALYTRAN-ORIG-TS","DALYTRAN.DALYTRAN-PROC-TS","DALYTRAN.FILLER"],"ops":[{"verb":"READ","line":203,"paragraph":"1000-DALYTRAN-GET-NEXT","record":"DALYTRAN-RECORD"}],"open":[{"mode":"INPUT","line":254}]},{"dd":"XREFFILE","no":"D2","name":"カード索引","nodes":["open","xref","xres","close"],"org":"索引","access":"ランダム","key":"カード番号 X(16)","len":50,"cb":"CVACT03Y","crud":"R","src":[[40,44],[76,79],[109,109]],"record":"CARD-XREF-RECORD","fields":["XREFFILE.XREF-CARD-NUM","XREFFILE.XREF-CUST-ID","XREFFILE.XREF-ACCT-ID","XREFFILE.FILLER"],"ops":[{"verb":"READ","line":229,"paragraph":"2000-LOOKUP-XREF","record":"CARD-XREF-RECORD"}],"open":[{"mode":"INPUT","line":291}]},{"dd":"ACCTFILE","no":"D3","name":"口座マスター","nodes":["open","acct","ares","close"],"org":"索引","access":"ランダム","key":"口座ID 9(11)","len":300,"cb":"CVACT01Y","crud":"R","src":[[52,56],[86,89],[119,119]],"record":"ACCOUNT-RECORD","fields":["ACCTFILE.ACCT-ID","ACCTFILE.ACCT-ACTIVE-STATUS","ACCTFILE.ACCT-CURR-BAL","ACCTFILE.ACCT-CREDIT-LIMIT","ACCTFILE.ACCT-CASH-CREDIT-LIMIT","ACCTFILE.ACCT-OPEN-DATE","ACCTFILE.ACCT-EXPIRAION-DATE","ACCTFILE.ACCT-REISSUE-DATE","ACCTFILE.ACCT-CURR-CYC-CREDIT","ACCTFILE.ACCT-CURR-CYC-DEBIT","ACCTFILE.ACCT-ADDR-ZIP","ACCTFILE.ACCT-GROUP-ID","ACCTFILE.FILLER"],"ops":[{"verb":"READ","line":243,"paragraph":"3000-READ-ACCOUNT","record":"ACCOUNT-RECORD"}],"open":[{"mode":"INPUT","line":327}]},{"dd":"CUSTFILE","no":"D4","name":"顧客マスター","nodes":["open","close"],"layoutRecord":"CUSTOMER-RECORD","org":"索引","access":"ランダム","key":"顧客ID 9(09)","len":500,"cb":"CVCUS01Y","crud":"O","src":[[34,38],[71,74],[104,104]],"record":"CUSTOMER-RECORD","fields":["CUSTFILE.CUST-ID","CUSTFILE.CUST-FIRST-NAME","CUSTFILE.CUST-MIDDLE-NAME","CUSTFILE.CUST-LAST-NAME","CUSTFILE.CUST-ADDR-LINE-1","CUSTFILE.CUST-ADDR-LINE-2","CUSTFILE.CUST-ADDR-LINE-3","CUSTFILE.CUST-ADDR-STATE-CD","CUSTFILE.CUST-ADDR-COUNTRY-CD","CUSTFILE.CUST-ADDR-ZIP","CUSTFILE.CUST-PHONE-NUM-1","CUSTFILE.CUST-PHONE-NUM-2","CUSTFILE.CUST-SSN","CUSTFILE.CUST-GOVT-ISSUED-ID","CUSTFILE.CUST-DOB-YYYY-MM-DD","CUSTFILE.CUST-EFT-ACCOUNT-ID","CUSTFILE.CUST-PRI-CARD-HOLDER-IND","CUSTFILE.CUST-FICO-CREDIT-SCORE","CUSTFILE.FILLER"],"ops":[],"open":[{"mode":"INPUT","line":273}]},{"dd":"CARDFILE","no":"D5","name":"カードマスター","nodes":["open","close"],"layoutRecord":"CARD-RECORD","org":"索引","access":"ランダム","key":"カード番号 X(16)","len":150,"cb":"CVACT02Y","crud":"O","src":[[46,50],[81,84],[114,114]],"record":"CARD-RECORD","fields":["CARDFILE.CARD-NUM","CARDFILE.CARD-ACCT-ID","CARDFILE.CARD-CVV-CD","CARDFILE.CARD-EMBOSSED-NAME","CARDFILE.CARD-EXPIRAION-DATE","CARDFILE.CARD-ACTIVE-STATUS","CARDFILE.FILLER"],"ops":[],"open":[{"mode":"INPUT","line":309}]},{"dd":"TRANFILE","no":"D6","name":"取引マスター","nodes":["open","close"],"layoutRecord":"TRAN-RECORD","org":"索引","access":"ランダム","key":"取引ID X(16)","len":350,"cb":"CVTRA05Y","crud":"O","src":[[58,62],[91,94],[124,124]],"record":"TRAN-RECORD","fields":["TRANFILE.TRAN-ID","TRANFILE.TRAN-TYPE-CD","TRANFILE.TRAN-CAT-CD","TRANFILE.TRAN-SOURCE","TRANFILE.TRAN-DESC","TRANFILE.TRAN-AMT","TRANFILE.TRAN-MERCHANT-ID","TRANFILE.TRAN-MERCHANT-NAME","TRANFILE.TRAN-MERCHANT-CITY","TRANFILE.TRAN-MERCHANT-ZIP","TRANFILE.TRAN-CARD-NUM","TRANFILE.TRAN-ORIG-TS","TRANFILE.TRAN-PROC-TS","TRANFILE.FILLER"],"ops":[],"open":[{"mode":"INPUT","line":345}]}],"fields":{"DALYTRAN.DALYTRAN-ID":{"key":"DALYTRAN.DALYTRAN-ID","store":"DALYTRAN","name":"DALYTRAN-ID","pic":"X(16)","usage":null,"pos":[1,16],"origin":"CVTRA06Y","line":5,"meaning":"取引ID","isKey":false,"direct":[183],"recLines":[168,203],"use":"個別参照","item":"DI-04"},"DALYTRAN.DALYTRAN-TYPE-CD":{"key":"DALYTRAN.DALYTRAN-TYPE-CD","store":"DALYTRAN","name":"DALYTRAN-TYPE-CD","pic":"X(02)","usage":null,"pos":[17,18],"origin":"CVTRA06Y","line":6,"meaning":"取引種別","isKey":false,"direct":[],"recLines":[168,203],"use":"レコード一括","item":"DI-05"},"DALYTRAN.DALYTRAN-CAT-CD":{"key":"DALYTRAN.DALYTRAN-CAT-CD","store":"DALYTRAN","name":"DALYTRAN-CAT-CD","pic":"9(04)","usage":null,"pos":[19,22],"origin":"CVTRA06Y","line":7,"meaning":"取引カテゴリ","isKey":false,"direct":[],"recLines":[168,203],"use":"レコード一括","item":"DI-06"},"DALYTRAN.DALYTRAN-SOURCE":{"key":"DALYTRAN.DALYTRAN-SOURCE","store":"DALYTRAN","name":"DALYTRAN-SOURCE","pic":"X(10)","usage":null,"pos":[23,32],"origin":"CVTRA06Y","line":8,"meaning":"取引元","isKey":false,"direct":[],"recLines":[168,203],"use":"レコード一括","item":"DI-07"},"DALYTRAN.DALYTRAN-DESC":{"key":"DALYTRAN.DALYTRAN-DESC","store":"DALYTRAN","name":"DALYTRAN-DESC","pic":"X(100)","usage":null,"pos":[33,132],"origin":"CVTRA06Y","line":9,"meaning":"取引説明","isKey":false,"direct":[],"recLines":[168,203],"use":"レコード一括","item":"DI-08"},"DALYTRAN.DALYTRAN-AMT":{"key":"DALYTRAN.DALYTRAN-AMT","store":"DALYTRAN","name":"DALYTRAN-AMT","pic":"S9(09)V99","usage":null,"pos":[133,143],"origin":"CVTRA06Y","line":10,"meaning":"取引金額","isKey":false,"direct":[],"recLines":[168,203],"use":"レコード一括","item":"DI-09"},"DALYTRAN.DALYTRAN-MERCHANT-ID":{"key":"DALYTRAN.DALYTRAN-MERCHANT-ID","store":"DALYTRAN","name":"DALYTRAN-MERCHANT-ID","pic":"9(09)","usage":null,"pos":[144,152],"origin":"CVTRA06Y","line":11,"meaning":"加盟店ID","isKey":false,"direct":[],"recLines":[168,203],"use":"レコード一括","item":"DI-10"},"DALYTRAN.DALYTRAN-MERCHANT-NAME":{"key":"DALYTRAN.DALYTRAN-MERCHANT-NAME","store":"DALYTRAN","name":"DALYTRAN-MERCHANT-NAME","pic":"X(50)","usage":null,"pos":[153,202],"origin":"CVTRA06Y","line":12,"meaning":"加盟店名","isKey":false,"direct":[],"recLines":[168,203],"use":"レコード一括","item":"DI-11"},"DALYTRAN.DALYTRAN-MERCHANT-CITY":{"key":"DALYTRAN.DALYTRAN-MERCHANT-CITY","store":"DALYTRAN","name":"DALYTRAN-MERCHANT-CITY","pic":"X(50)","usage":null,"pos":[203,252],"origin":"CVTRA06Y","line":13,"meaning":"加盟店の市区","isKey":false,"direct":[],"recLines":[168,203],"use":"レコード一括","item":"DI-12"},"DALYTRAN.DALYTRAN-MERCHANT-ZIP":{"key":"DALYTRAN.DALYTRAN-MERCHANT-ZIP","store":"DALYTRAN","name":"DALYTRAN-MERCHANT-ZIP","pic":"X(10)","usage":null,"pos":[253,262],"origin":"CVTRA06Y","line":14,"meaning":"加盟店の郵便番号","isKey":false,"direct":[],"recLines":[168,203],"use":"レコード一括","item":"DI-13"},"DALYTRAN.DALYTRAN-CARD-NUM":{"key":"DALYTRAN.DALYTRAN-CARD-NUM","store":"DALYTRAN","name":"DALYTRAN-CARD-NUM","pic":"X(16)","usage":null,"pos":[263,278],"origin":"CVTRA06Y","line":15,"meaning":"カード番号","isKey":false,"direct":[171,181],"recLines":[168,203],"use":"個別参照","item":"DI-01"},"DALYTRAN.DALYTRAN-ORIG-TS":{"key":"DALYTRAN.DALYTRAN-ORIG-TS","store":"DALYTRAN","name":"DALYTRAN-ORIG-TS","pic":"X(26)","usage":null,"pos":[279,304],"origin":"CVTRA06Y","line":16,"meaning":"取引発生日時","isKey":false,"direct":[],"recLines":[168,203],"use":"レコード一括","item":"DI-14"},"DALYTRAN.DALYTRAN-PROC-TS":{"key":"DALYTRAN.DALYTRAN-PROC-TS","store":"DALYTRAN","name":"DALYTRAN-PROC-TS","pic":"X(26)","usage":null,"pos":[305,330],"origin":"CVTRA06Y","line":17,"meaning":"取引処理日時","isKey":false,"direct":[],"recLines":[168,203],"use":"レコード一括","item":"DI-15"},"DALYTRAN.FILLER":{"key":"DALYTRAN.FILLER","store":"DALYTRAN","name":"FILLER","pic":"X(20)","usage":null,"pos":[331,350],"origin":"CVTRA06Y","line":18,"meaning":"予備領域（日次取引）","isKey":false,"direct":[],"recLines":[168,203],"use":"レコード一括","item":"DI-16"},"XREFFILE.XREF-CARD-NUM":{"key":"XREFFILE.XREF-CARD-NUM","store":"XREFFILE","name":"XREF-CARD-NUM","pic":"X(16)","usage":null,"pos":[1,16],"origin":"CVACT03Y","line":5,"meaning":"カード番号","isKey":true,"direct":[171,228,236],"recLines":[229],"use":"個別参照","item":"DI-01"},"XREFFILE.XREF-CUST-ID":{"key":"XREFFILE.XREF-CUST-ID","store":"XREFFILE","name":"XREF-CUST-ID","pic":"9(09)","usage":null,"pos":[17,25],"origin":"CVACT03Y","line":6,"meaning":"顧客ID","isKey":false,"direct":[238],"recLines":[229],"use":"個別参照","item":"DI-03"},"XREFFILE.XREF-ACCT-ID":{"key":"XREFFILE.XREF-ACCT-ID","store":"XREFFILE","name":"XREF-ACCT-ID","pic":"9(11)","usage":null,"pos":[26,36],"origin":"CVACT03Y","line":7,"meaning":"口座ID","isKey":false,"direct":[175,237],"recLines":[229],"use":"個別参照","item":"DI-02"},"XREFFILE.FILLER":{"key":"XREFFILE.FILLER","store":"XREFFILE","name":"FILLER","pic":"X(14)","usage":null,"pos":[37,50],"origin":"CVACT03Y","line":8,"meaning":"予備領域（カード索引）","isKey":false,"direct":[],"recLines":[229],"use":"レコード一括","item":"DI-17"},"ACCTFILE.ACCT-ID":{"key":"ACCTFILE.ACCT-ID","store":"ACCTFILE","name":"ACCT-ID","pic":"9(11)","usage":null,"pos":[1,11],"origin":"CVACT01Y","line":5,"meaning":"口座ID","isKey":true,"direct":[175,178,242],"recLines":[243],"use":"個別参照","item":"DI-02"},"ACCTFILE.ACCT-ACTIVE-STATUS":{"key":"ACCTFILE.ACCT-ACTIVE-STATUS","store":"ACCTFILE","name":"ACCT-ACTIVE-STATUS","pic":"X(01)","usage":null,"pos":[12,12],"origin":"CVACT01Y","line":6,"meaning":"口座の有効状態","isKey":false,"direct":[],"recLines":[243],"use":"レコード一括","item":"DI-18"},"ACCTFILE.ACCT-CURR-BAL":{"key":"ACCTFILE.ACCT-CURR-BAL","store":"ACCTFILE","name":"ACCT-CURR-BAL","pic":"S9(10)V99","usage":null,"pos":[13,24],"origin":"CVACT01Y","line":7,"meaning":"現在残高","isKey":false,"direct":[],"recLines":[243],"use":"レコード一括","item":"DI-19"},"ACCTFILE.ACCT-CREDIT-LIMIT":{"key":"ACCTFILE.ACCT-CREDIT-LIMIT","store":"ACCTFILE","name":"ACCT-CREDIT-LIMIT","pic":"S9(10)V99","usage":null,"pos":[25,36],"origin":"CVACT01Y","line":8,"meaning":"与信限度額","isKey":false,"direct":[],"recLines":[243],"use":"レコード一括","item":"DI-20"},"ACCTFILE.ACCT-CASH-CREDIT-LIMIT":{"key":"ACCTFILE.ACCT-CASH-CREDIT-LIMIT","store":"ACCTFILE","name":"ACCT-CASH-CREDIT-LIMIT","pic":"S9(10)V99","usage":null,"pos":[37,48],"origin":"CVACT01Y","line":9,"meaning":"キャッシング限度額","isKey":false,"direct":[],"recLines":[243],"use":"レコード一括","item":"DI-21"},"ACCTFILE.ACCT-OPEN-DATE":{"key":"ACCTFILE.ACCT-OPEN-DATE","store":"ACCTFILE","name":"ACCT-OPEN-DATE","pic":"X(10)","usage":null,"pos":[49,58],"origin":"CVACT01Y","line":10,"meaning":"口座開設日","isKey":false,"direct":[],"recLines":[243],"use":"レコード一括","item":"DI-22"},"ACCTFILE.ACCT-EXPIRAION-DATE":{"key":"ACCTFILE.ACCT-EXPIRAION-DATE","store":"ACCTFILE","name":"ACCT-EXPIRAION-DATE","pic":"X(10)","usage":null,"pos":[59,68],"origin":"CVACT01Y","line":11,"meaning":"口座の有効期限","isKey":false,"direct":[],"recLines":[243],"use":"レコード一括","item":"DI-23"},"ACCTFILE.ACCT-REISSUE-DATE":{"key":"ACCTFILE.ACCT-REISSUE-DATE","store":"ACCTFILE","name":"ACCT-REISSUE-DATE","pic":"X(10)","usage":null,"pos":[69,78],"origin":"CVACT01Y","line":12,"meaning":"再発行日","isKey":false,"direct":[],"recLines":[243],"use":"レコード一括","item":"DI-24"},"ACCTFILE.ACCT-CURR-CYC-CREDIT":{"key":"ACCTFILE.ACCT-CURR-CYC-CREDIT","store":"ACCTFILE","name":"ACCT-CURR-CYC-CREDIT","pic":"S9(10)V99","usage":null,"pos":[79,90],"origin":"CVACT01Y","line":13,"meaning":"当期貸方額","isKey":false,"direct":[],"recLines":[243],"use":"レコード一括","item":"DI-25"},"ACCTFILE.ACCT-CURR-CYC-DEBIT":{"key":"ACCTFILE.ACCT-CURR-CYC-DEBIT","store":"ACCTFILE","name":"ACCT-CURR-CYC-DEBIT","pic":"S9(10)V99","usage":null,"pos":[91,102],"origin":"CVACT01Y","line":14,"meaning":"当期借方額","isKey":false,"direct":[],"recLines":[243],"use":"レコード一括","item":"DI-26"},"ACCTFILE.ACCT-ADDR-ZIP":{"key":"ACCTFILE.ACCT-ADDR-ZIP","store":"ACCTFILE","name":"ACCT-ADDR-ZIP","pic":"X(10)","usage":null,"pos":[103,112],"origin":"CVACT01Y","line":15,"meaning":"口座の郵便番号","isKey":false,"direct":[],"recLines":[243],"use":"レコード一括","item":"DI-27"},"ACCTFILE.ACCT-GROUP-ID":{"key":"ACCTFILE.ACCT-GROUP-ID","store":"ACCTFILE","name":"ACCT-GROUP-ID","pic":"X(10)","usage":null,"pos":[113,122],"origin":"CVACT01Y","line":16,"meaning":"グループID","isKey":false,"direct":[],"recLines":[243],"use":"レコード一括","item":"DI-28"},"ACCTFILE.FILLER":{"key":"ACCTFILE.FILLER","store":"ACCTFILE","name":"FILLER","pic":"X(178)","usage":null,"pos":[123,300],"origin":"CVACT01Y","line":17,"meaning":"予備領域（口座マスター）","isKey":false,"direct":[],"recLines":[243],"use":"レコード一括","item":"DI-29"},"CUSTFILE.CUST-ID":{"key":"CUSTFILE.CUST-ID","store":"CUSTFILE","name":"CUST-ID","pic":"9(09)","usage":null,"pos":[1,9],"origin":"CVCUS01Y","line":5,"meaning":"顧客ID","isKey":true,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-03"},"CUSTFILE.CUST-FIRST-NAME":{"key":"CUSTFILE.CUST-FIRST-NAME","store":"CUSTFILE","name":"CUST-FIRST-NAME","pic":"X(25)","usage":null,"pos":[10,34],"origin":"CVCUS01Y","line":6,"meaning":"名","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-30"},"CUSTFILE.CUST-MIDDLE-NAME":{"key":"CUSTFILE.CUST-MIDDLE-NAME","store":"CUSTFILE","name":"CUST-MIDDLE-NAME","pic":"X(25)","usage":null,"pos":[35,59],"origin":"CVCUS01Y","line":7,"meaning":"ミドルネーム","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-31"},"CUSTFILE.CUST-LAST-NAME":{"key":"CUSTFILE.CUST-LAST-NAME","store":"CUSTFILE","name":"CUST-LAST-NAME","pic":"X(25)","usage":null,"pos":[60,84],"origin":"CVCUS01Y","line":8,"meaning":"姓","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-32"},"CUSTFILE.CUST-ADDR-LINE-1":{"key":"CUSTFILE.CUST-ADDR-LINE-1","store":"CUSTFILE","name":"CUST-ADDR-LINE-1","pic":"X(50)","usage":null,"pos":[85,134],"origin":"CVCUS01Y","line":9,"meaning":"住所1","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-33"},"CUSTFILE.CUST-ADDR-LINE-2":{"key":"CUSTFILE.CUST-ADDR-LINE-2","store":"CUSTFILE","name":"CUST-ADDR-LINE-2","pic":"X(50)","usage":null,"pos":[135,184],"origin":"CVCUS01Y","line":10,"meaning":"住所2","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-34"},"CUSTFILE.CUST-ADDR-LINE-3":{"key":"CUSTFILE.CUST-ADDR-LINE-3","store":"CUSTFILE","name":"CUST-ADDR-LINE-3","pic":"X(50)","usage":null,"pos":[185,234],"origin":"CVCUS01Y","line":11,"meaning":"住所3","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-35"},"CUSTFILE.CUST-ADDR-STATE-CD":{"key":"CUSTFILE.CUST-ADDR-STATE-CD","store":"CUSTFILE","name":"CUST-ADDR-STATE-CD","pic":"X(02)","usage":null,"pos":[235,236],"origin":"CVCUS01Y","line":12,"meaning":"州コード","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-36"},"CUSTFILE.CUST-ADDR-COUNTRY-CD":{"key":"CUSTFILE.CUST-ADDR-COUNTRY-CD","store":"CUSTFILE","name":"CUST-ADDR-COUNTRY-CD","pic":"X(03)","usage":null,"pos":[237,239],"origin":"CVCUS01Y","line":13,"meaning":"国コード","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-37"},"CUSTFILE.CUST-ADDR-ZIP":{"key":"CUSTFILE.CUST-ADDR-ZIP","store":"CUSTFILE","name":"CUST-ADDR-ZIP","pic":"X(10)","usage":null,"pos":[240,249],"origin":"CVCUS01Y","line":14,"meaning":"顧客の郵便番号","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-38"},"CUSTFILE.CUST-PHONE-NUM-1":{"key":"CUSTFILE.CUST-PHONE-NUM-1","store":"CUSTFILE","name":"CUST-PHONE-NUM-1","pic":"X(15)","usage":null,"pos":[250,264],"origin":"CVCUS01Y","line":15,"meaning":"電話番号1","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-39"},"CUSTFILE.CUST-PHONE-NUM-2":{"key":"CUSTFILE.CUST-PHONE-NUM-2","store":"CUSTFILE","name":"CUST-PHONE-NUM-2","pic":"X(15)","usage":null,"pos":[265,279],"origin":"CVCUS01Y","line":16,"meaning":"電話番号2","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-40"},"CUSTFILE.CUST-SSN":{"key":"CUSTFILE.CUST-SSN","store":"CUSTFILE","name":"CUST-SSN","pic":"9(09)","usage":null,"pos":[280,288],"origin":"CVCUS01Y","line":17,"meaning":"社会保障番号","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-41"},"CUSTFILE.CUST-GOVT-ISSUED-ID":{"key":"CUSTFILE.CUST-GOVT-ISSUED-ID","store":"CUSTFILE","name":"CUST-GOVT-ISSUED-ID","pic":"X(20)","usage":null,"pos":[289,308],"origin":"CVCUS01Y","line":18,"meaning":"公的身分証ID","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-42"},"CUSTFILE.CUST-DOB-YYYY-MM-DD":{"key":"CUSTFILE.CUST-DOB-YYYY-MM-DD","store":"CUSTFILE","name":"CUST-DOB-YYYY-MM-DD","pic":"X(10)","usage":null,"pos":[309,318],"origin":"CVCUS01Y","line":19,"meaning":"生年月日","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-43"},"CUSTFILE.CUST-EFT-ACCOUNT-ID":{"key":"CUSTFILE.CUST-EFT-ACCOUNT-ID","store":"CUSTFILE","name":"CUST-EFT-ACCOUNT-ID","pic":"X(10)","usage":null,"pos":[319,328],"origin":"CVCUS01Y","line":20,"meaning":"振替口座ID","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-44"},"CUSTFILE.CUST-PRI-CARD-HOLDER-IND":{"key":"CUSTFILE.CUST-PRI-CARD-HOLDER-IND","store":"CUSTFILE","name":"CUST-PRI-CARD-HOLDER-IND","pic":"X(01)","usage":null,"pos":[329,329],"origin":"CVCUS01Y","line":21,"meaning":"本会員区分","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-45"},"CUSTFILE.CUST-FICO-CREDIT-SCORE":{"key":"CUSTFILE.CUST-FICO-CREDIT-SCORE","store":"CUSTFILE","name":"CUST-FICO-CREDIT-SCORE","pic":"9(03)","usage":null,"pos":[330,332],"origin":"CVCUS01Y","line":22,"meaning":"信用スコア","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-46"},"CUSTFILE.FILLER":{"key":"CUSTFILE.FILLER","store":"CUSTFILE","name":"FILLER","pic":"X(168)","usage":null,"pos":[333,500],"origin":"CVCUS01Y","line":23,"meaning":"予備領域（顧客マスター）","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-47"},"CARDFILE.CARD-NUM":{"key":"CARDFILE.CARD-NUM","store":"CARDFILE","name":"CARD-NUM","pic":"X(16)","usage":null,"pos":[1,16],"origin":"CVACT02Y","line":5,"meaning":"カード番号","isKey":true,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-01"},"CARDFILE.CARD-ACCT-ID":{"key":"CARDFILE.CARD-ACCT-ID","store":"CARDFILE","name":"CARD-ACCT-ID","pic":"9(11)","usage":null,"pos":[17,27],"origin":"CVACT02Y","line":6,"meaning":"口座ID","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-02"},"CARDFILE.CARD-CVV-CD":{"key":"CARDFILE.CARD-CVV-CD","store":"CARDFILE","name":"CARD-CVV-CD","pic":"9(03)","usage":null,"pos":[28,30],"origin":"CVACT02Y","line":7,"meaning":"確認コード","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-48"},"CARDFILE.CARD-EMBOSSED-NAME":{"key":"CARDFILE.CARD-EMBOSSED-NAME","store":"CARDFILE","name":"CARD-EMBOSSED-NAME","pic":"X(50)","usage":null,"pos":[31,80],"origin":"CVACT02Y","line":8,"meaning":"カード券面名","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-49"},"CARDFILE.CARD-EXPIRAION-DATE":{"key":"CARDFILE.CARD-EXPIRAION-DATE","store":"CARDFILE","name":"CARD-EXPIRAION-DATE","pic":"X(10)","usage":null,"pos":[81,90],"origin":"CVACT02Y","line":9,"meaning":"カードの有効期限","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-50"},"CARDFILE.CARD-ACTIVE-STATUS":{"key":"CARDFILE.CARD-ACTIVE-STATUS","store":"CARDFILE","name":"CARD-ACTIVE-STATUS","pic":"X(01)","usage":null,"pos":[91,91],"origin":"CVACT02Y","line":10,"meaning":"カードの有効状態","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-51"},"CARDFILE.FILLER":{"key":"CARDFILE.FILLER","store":"CARDFILE","name":"FILLER","pic":"X(59)","usage":null,"pos":[92,150],"origin":"CVACT02Y","line":11,"meaning":"予備領域（カードマスター）","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-52"},"TRANFILE.TRAN-ID":{"key":"TRANFILE.TRAN-ID","store":"TRANFILE","name":"TRAN-ID","pic":"X(16)","usage":null,"pos":[1,16],"origin":"CVTRA05Y","line":5,"meaning":"取引ID","isKey":true,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-04"},"TRANFILE.TRAN-TYPE-CD":{"key":"TRANFILE.TRAN-TYPE-CD","store":"TRANFILE","name":"TRAN-TYPE-CD","pic":"X(02)","usage":null,"pos":[17,18],"origin":"CVTRA05Y","line":6,"meaning":"取引種別","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-05"},"TRANFILE.TRAN-CAT-CD":{"key":"TRANFILE.TRAN-CAT-CD","store":"TRANFILE","name":"TRAN-CAT-CD","pic":"9(04)","usage":null,"pos":[19,22],"origin":"CVTRA05Y","line":7,"meaning":"取引カテゴリ","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-06"},"TRANFILE.TRAN-SOURCE":{"key":"TRANFILE.TRAN-SOURCE","store":"TRANFILE","name":"TRAN-SOURCE","pic":"X(10)","usage":null,"pos":[23,32],"origin":"CVTRA05Y","line":8,"meaning":"取引元","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-07"},"TRANFILE.TRAN-DESC":{"key":"TRANFILE.TRAN-DESC","store":"TRANFILE","name":"TRAN-DESC","pic":"X(100)","usage":null,"pos":[33,132],"origin":"CVTRA05Y","line":9,"meaning":"取引説明","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-08"},"TRANFILE.TRAN-AMT":{"key":"TRANFILE.TRAN-AMT","store":"TRANFILE","name":"TRAN-AMT","pic":"S9(09)V99","usage":null,"pos":[133,143],"origin":"CVTRA05Y","line":10,"meaning":"取引金額","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-09"},"TRANFILE.TRAN-MERCHANT-ID":{"key":"TRANFILE.TRAN-MERCHANT-ID","store":"TRANFILE","name":"TRAN-MERCHANT-ID","pic":"9(09)","usage":null,"pos":[144,152],"origin":"CVTRA05Y","line":11,"meaning":"加盟店ID","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-10"},"TRANFILE.TRAN-MERCHANT-NAME":{"key":"TRANFILE.TRAN-MERCHANT-NAME","store":"TRANFILE","name":"TRAN-MERCHANT-NAME","pic":"X(50)","usage":null,"pos":[153,202],"origin":"CVTRA05Y","line":12,"meaning":"加盟店名","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-11"},"TRANFILE.TRAN-MERCHANT-CITY":{"key":"TRANFILE.TRAN-MERCHANT-CITY","store":"TRANFILE","name":"TRAN-MERCHANT-CITY","pic":"X(50)","usage":null,"pos":[203,252],"origin":"CVTRA05Y","line":13,"meaning":"加盟店の市区","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-12"},"TRANFILE.TRAN-MERCHANT-ZIP":{"key":"TRANFILE.TRAN-MERCHANT-ZIP","store":"TRANFILE","name":"TRAN-MERCHANT-ZIP","pic":"X(10)","usage":null,"pos":[253,262],"origin":"CVTRA05Y","line":14,"meaning":"加盟店の郵便番号","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-13"},"TRANFILE.TRAN-CARD-NUM":{"key":"TRANFILE.TRAN-CARD-NUM","store":"TRANFILE","name":"TRAN-CARD-NUM","pic":"X(16)","usage":null,"pos":[263,278],"origin":"CVTRA05Y","line":15,"meaning":"カード番号","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-01"},"TRANFILE.TRAN-ORIG-TS":{"key":"TRANFILE.TRAN-ORIG-TS","store":"TRANFILE","name":"TRAN-ORIG-TS","pic":"X(26)","usage":null,"pos":[279,304],"origin":"CVTRA05Y","line":16,"meaning":"取引発生日時","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-14"},"TRANFILE.TRAN-PROC-TS":{"key":"TRANFILE.TRAN-PROC-TS","store":"TRANFILE","name":"TRAN-PROC-TS","pic":"X(26)","usage":null,"pos":[305,330],"origin":"CVTRA05Y","line":17,"meaning":"取引処理日時","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-15"},"TRANFILE.FILLER":{"key":"TRANFILE.FILLER","store":"TRANFILE","name":"FILLER","pic":"X(20)","usage":null,"pos":[331,350],"origin":"CVTRA05Y","line":18,"meaning":"予備領域（取引マスター）","isKey":false,"direct":[],"recLines":[],"use":"定義のみ","item":"DI-53"}},"items":[{"id":"DI-01","name":"カード番号","fields":["XREFFILE.XREF-CARD-NUM","CARDFILE.CARD-NUM","DALYTRAN.DALYTRAN-CARD-NUM","TRANFILE.TRAN-CARD-NUM"],"isKey":true,"pics":["X(16)"],"use":"個別参照"},{"id":"DI-02","name":"口座ID","fields":["ACCTFILE.ACCT-ID","XREFFILE.XREF-ACCT-ID","CARDFILE.CARD-ACCT-ID"],"isKey":true,"pics":["9(11)"],"use":"個別参照"},{"id":"DI-03","name":"顧客ID","fields":["CUSTFILE.CUST-ID","XREFFILE.XREF-CUST-ID"],"isKey":true,"pics":["9(09)"],"use":"個別参照"},{"id":"DI-04","name":"取引ID","fields":["TRANFILE.TRAN-ID","DALYTRAN.DALYTRAN-ID"],"isKey":true,"pics":["X(16)"],"use":"個別参照"},{"id":"DI-05","name":"取引種別","fields":["DALYTRAN.DALYTRAN-TYPE-CD","TRANFILE.TRAN-TYPE-CD"],"isKey":false,"pics":["X(02)"],"use":"レコード一括"},{"id":"DI-06","name":"取引カテゴリ","fields":["DALYTRAN.DALYTRAN-CAT-CD","TRANFILE.TRAN-CAT-CD"],"isKey":false,"pics":["9(04)"],"use":"レコード一括"},{"id":"DI-07","name":"取引元","fields":["DALYTRAN.DALYTRAN-SOURCE","TRANFILE.TRAN-SOURCE"],"isKey":false,"pics":["X(10)"],"use":"レコード一括"},{"id":"DI-08","name":"取引説明","fields":["DALYTRAN.DALYTRAN-DESC","TRANFILE.TRAN-DESC"],"isKey":false,"pics":["X(100)"],"use":"レコード一括"},{"id":"DI-09","name":"取引金額","fields":["DALYTRAN.DALYTRAN-AMT","TRANFILE.TRAN-AMT"],"isKey":false,"pics":["S9(09)V99"],"use":"レコード一括"},{"id":"DI-10","name":"加盟店ID","fields":["DALYTRAN.DALYTRAN-MERCHANT-ID","TRANFILE.TRAN-MERCHANT-ID"],"isKey":false,"pics":["9(09)"],"use":"レコード一括"},{"id":"DI-11","name":"加盟店名","fields":["DALYTRAN.DALYTRAN-MERCHANT-NAME","TRANFILE.TRAN-MERCHANT-NAME"],"isKey":false,"pics":["X(50)"],"use":"レコード一括"},{"id":"DI-12","name":"加盟店の市区","fields":["DALYTRAN.DALYTRAN-MERCHANT-CITY","TRANFILE.TRAN-MERCHANT-CITY"],"isKey":false,"pics":["X(50)"],"use":"レコード一括"},{"id":"DI-13","name":"加盟店の郵便番号","fields":["DALYTRAN.DALYTRAN-MERCHANT-ZIP","TRANFILE.TRAN-MERCHANT-ZIP"],"isKey":false,"pics":["X(10)"],"use":"レコード一括"},{"id":"DI-14","name":"取引発生日時","fields":["DALYTRAN.DALYTRAN-ORIG-TS","TRANFILE.TRAN-ORIG-TS"],"isKey":false,"pics":["X(26)"],"use":"レコード一括"},{"id":"DI-15","name":"取引処理日時","fields":["DALYTRAN.DALYTRAN-PROC-TS","TRANFILE.TRAN-PROC-TS"],"isKey":false,"pics":["X(26)"],"use":"レコード一括"},{"id":"DI-16","name":"予備領域（日次取引）","fields":["DALYTRAN.FILLER"],"isKey":false,"pics":["X(20)"],"use":"レコード一括"},{"id":"DI-17","name":"予備領域（カード索引）","fields":["XREFFILE.FILLER"],"isKey":false,"pics":["X(14)"],"use":"レコード一括"},{"id":"DI-18","name":"口座の有効状態","fields":["ACCTFILE.ACCT-ACTIVE-STATUS"],"isKey":false,"pics":["X(01)"],"use":"レコード一括"},{"id":"DI-19","name":"現在残高","fields":["ACCTFILE.ACCT-CURR-BAL"],"isKey":false,"pics":["S9(10)V99"],"use":"レコード一括"},{"id":"DI-20","name":"与信限度額","fields":["ACCTFILE.ACCT-CREDIT-LIMIT"],"isKey":false,"pics":["S9(10)V99"],"use":"レコード一括"},{"id":"DI-21","name":"キャッシング限度額","fields":["ACCTFILE.ACCT-CASH-CREDIT-LIMIT"],"isKey":false,"pics":["S9(10)V99"],"use":"レコード一括"},{"id":"DI-22","name":"口座開設日","fields":["ACCTFILE.ACCT-OPEN-DATE"],"isKey":false,"pics":["X(10)"],"use":"レコード一括"},{"id":"DI-23","name":"口座の有効期限","fields":["ACCTFILE.ACCT-EXPIRAION-DATE"],"isKey":false,"pics":["X(10)"],"use":"レコード一括"},{"id":"DI-24","name":"再発行日","fields":["ACCTFILE.ACCT-REISSUE-DATE"],"isKey":false,"pics":["X(10)"],"use":"レコード一括"},{"id":"DI-25","name":"当期貸方額","fields":["ACCTFILE.ACCT-CURR-CYC-CREDIT"],"isKey":false,"pics":["S9(10)V99"],"use":"レコード一括"},{"id":"DI-26","name":"当期借方額","fields":["ACCTFILE.ACCT-CURR-CYC-DEBIT"],"isKey":false,"pics":["S9(10)V99"],"use":"レコード一括"},{"id":"DI-27","name":"口座の郵便番号","fields":["ACCTFILE.ACCT-ADDR-ZIP"],"isKey":false,"pics":["X(10)"],"use":"レコード一括"},{"id":"DI-28","name":"グループID","fields":["ACCTFILE.ACCT-GROUP-ID"],"isKey":false,"pics":["X(10)"],"use":"レコード一括"},{"id":"DI-29","name":"予備領域（口座マスター）","fields":["ACCTFILE.FILLER"],"isKey":false,"pics":["X(178)"],"use":"レコード一括"},{"id":"DI-30","name":"名","fields":["CUSTFILE.CUST-FIRST-NAME"],"isKey":false,"pics":["X(25)"],"use":"定義のみ"},{"id":"DI-31","name":"ミドルネーム","fields":["CUSTFILE.CUST-MIDDLE-NAME"],"isKey":false,"pics":["X(25)"],"use":"定義のみ"},{"id":"DI-32","name":"姓","fields":["CUSTFILE.CUST-LAST-NAME"],"isKey":false,"pics":["X(25)"],"use":"定義のみ"},{"id":"DI-33","name":"住所1","fields":["CUSTFILE.CUST-ADDR-LINE-1"],"isKey":false,"pics":["X(50)"],"use":"定義のみ"},{"id":"DI-34","name":"住所2","fields":["CUSTFILE.CUST-ADDR-LINE-2"],"isKey":false,"pics":["X(50)"],"use":"定義のみ"},{"id":"DI-35","name":"住所3","fields":["CUSTFILE.CUST-ADDR-LINE-3"],"isKey":false,"pics":["X(50)"],"use":"定義のみ"},{"id":"DI-36","name":"州コード","fields":["CUSTFILE.CUST-ADDR-STATE-CD"],"isKey":false,"pics":["X(02)"],"use":"定義のみ"},{"id":"DI-37","name":"国コード","fields":["CUSTFILE.CUST-ADDR-COUNTRY-CD"],"isKey":false,"pics":["X(03)"],"use":"定義のみ"},{"id":"DI-38","name":"顧客の郵便番号","fields":["CUSTFILE.CUST-ADDR-ZIP"],"isKey":false,"pics":["X(10)"],"use":"定義のみ"},{"id":"DI-39","name":"電話番号1","fields":["CUSTFILE.CUST-PHONE-NUM-1"],"isKey":false,"pics":["X(15)"],"use":"定義のみ"},{"id":"DI-40","name":"電話番号2","fields":["CUSTFILE.CUST-PHONE-NUM-2"],"isKey":false,"pics":["X(15)"],"use":"定義のみ"},{"id":"DI-41","name":"社会保障番号","fields":["CUSTFILE.CUST-SSN"],"isKey":false,"pics":["9(09)"],"use":"定義のみ"},{"id":"DI-42","name":"公的身分証ID","fields":["CUSTFILE.CUST-GOVT-ISSUED-ID"],"isKey":false,"pics":["X(20)"],"use":"定義のみ"},{"id":"DI-43","name":"生年月日","fields":["CUSTFILE.CUST-DOB-YYYY-MM-DD"],"isKey":false,"pics":["X(10)"],"use":"定義のみ"},{"id":"DI-44","name":"振替口座ID","fields":["CUSTFILE.CUST-EFT-ACCOUNT-ID"],"isKey":false,"pics":["X(10)"],"use":"定義のみ"},{"id":"DI-45","name":"本会員区分","fields":["CUSTFILE.CUST-PRI-CARD-HOLDER-IND"],"isKey":false,"pics":["X(01)"],"use":"定義のみ"},{"id":"DI-46","name":"信用スコア","fields":["CUSTFILE.CUST-FICO-CREDIT-SCORE"],"isKey":false,"pics":["9(03)"],"use":"定義のみ"},{"id":"DI-47","name":"予備領域（顧客マスター）","fields":["CUSTFILE.FILLER"],"isKey":false,"pics":["X(168)"],"use":"定義のみ"},{"id":"DI-48","name":"確認コード","fields":["CARDFILE.CARD-CVV-CD"],"isKey":false,"pics":["9(03)"],"use":"定義のみ"},{"id":"DI-49","name":"カード券面名","fields":["CARDFILE.CARD-EMBOSSED-NAME"],"isKey":false,"pics":["X(50)"],"use":"定義のみ"},{"id":"DI-50","name":"カードの有効期限","fields":["CARDFILE.CARD-EXPIRAION-DATE"],"isKey":false,"pics":["X(10)"],"use":"定義のみ"},{"id":"DI-51","name":"カードの有効状態","fields":["CARDFILE.CARD-ACTIVE-STATUS"],"isKey":false,"pics":["X(01)"],"use":"定義のみ"},{"id":"DI-52","name":"予備領域（カードマスター）","fields":["CARDFILE.FILLER"],"isKey":false,"pics":["X(59)"],"use":"定義のみ"},{"id":"DI-53","name":"予備領域（取引マスター）","fields":["TRANFILE.FILLER"],"isKey":false,"pics":["X(20)"],"use":"定義のみ"}],"flow":{"nodes":[{"id":"start","type":"term","label":"開始","sub":"START OF EXECUTION を表示","lines":[[155,156]],"orig":"MAIN-PARA","desc":"開始メッセージを標準出力に出します。","lane":"main","row":0,"x":350,"y":42,"w":190,"h":46},{"id":"open","type":"pre","label":"6ファイルを入力用に開く","sub":"定型 ×6 · 0000〜0500","lines":[[157,162],[252,360]],"orig":"0000-DALYTRAN-OPEN 〜 0500-TRANFILE-OPEN","desc":"日次取引・顧客・カード索引・カード・口座・取引の6ファイルを、この順に OPEN INPUT します。6段落とも同じ形で、違うのはファイル名と表示するメッセージだけです。1つでも失敗すると異常終了します。","lane":"main","row":1,"routine":"open","x":350,"y":128,"w":220,"h":52},{"id":"read","type":"pre","label":"日次取引を1件読む","sub":"1000-DALYTRAN-GET-NEXT","lines":[[166,166],[202,212]],"orig":"1000-DALYTRAN-GET-NEXT","desc":"日次取引ファイルを先頭から順に1件読み、作業領域 DALYTRAN-RECORD に移します（READ … INTO）。","lane":"main","row":2,"x":350,"y":214,"w":220,"h":52},{"id":"rres","type":"dec","label":"読込の結果は","lines":[[205,226]],"orig":"DALYTRAN-STATUS / APPL-RESULT","desc":"ファイル状態 '00' は正常、'10' はEOF、それ以外は読込エラーです。","lane":"main","row":3,"x":350,"y":300,"w":220,"h":70},{"id":"disp","type":"proc","label":"取引レコードを表示","sub":"EOFでないときだけ","lines":[[167,169]],"orig":"DISPLAY DALYTRAN-RECORD","desc":"読んだ取引レコード全体を表示します。EOFのときは表示しません。","lane":"main","row":4,"x":350,"y":386,"w":220,"h":50},{"id":"xref","type":"pre","label":"カード番号で索引を引く","sub":"2000-LOOKUP-XREF","lines":[[170,172],[227,229]],"orig":"2000-LOOKUP-XREF","desc":"取引のカード番号をキーに、カード索引（XREF）をランダム読込します。見つかれば口座IDと顧客IDが分かります。","lane":"main","row":5,"x":350,"y":472,"w":220,"h":52},{"id":"xres","type":"dec","label":"索引にカードがあるか","lines":[[173,173],[230,240]],"orig":"INVALID KEY / WS-XREF-READ-STATUS","desc":"INVALID KEY なら未登録です。見つかった場合はカード番号・口座ID・顧客IDを表示します。","lane":"main","row":6,"x":350,"y":558,"w":220,"h":70},{"id":"acct","type":"pre","label":"口座IDで口座マスターを引く","sub":"3000-READ-ACCOUNT","lines":[[174,176],[241,243]],"orig":"3000-READ-ACCOUNT","desc":"索引で得た口座IDをキーに、口座マスター（ACCTFILE）をランダム読込します。","lane":"main","row":7,"x":350,"y":644,"w":220,"h":52},{"id":"ares","type":"dec","label":"口座があるか","lines":[[177,177],[244,251]],"orig":"INVALID KEY / WS-ACCT-READ-STATUS","desc":"見つかれば SUCCESSFUL READ OF ACCOUNT FILE を表示して照合成功です。照合結果をファイルに書くことはありません。","lane":"main","row":8,"x":350,"y":730,"w":220,"h":70},{"id":"loop","type":"dec","label":"EOFに達したか","lines":[[164,165],[185,186]],"orig":"PERFORM UNTIL END-OF-DAILY-TRANS-FILE = 'Y'","desc":"EOFフラグが 'Y' になるまで、1件ずつの処理を繰り返します。","lane":"main","row":9,"x":350,"y":816,"w":220,"h":70},{"id":"close","type":"pre","label":"6ファイルを閉じる","sub":"定型 ×6 · 9000〜9500","lines":[[187,193],[361,468]],"orig":"9000-DALYTRAN-CLOSE 〜 9500-TRANFILE-CLOSE","desc":"開いたときと同じ順に6ファイルを閉じます。6段落とも同じ形です。ただし日次取引を閉じる段落だけ、表示内容が他と食い違っています（下の表）。","lane":"main","row":10,"routine":"close","x":350,"y":902,"w":220,"h":52},{"id":"end","type":"term","label":"終了","sub":"END OF EXECUTION · GOBACK","lines":[[194,196]],"orig":"GOBACK","desc":"終了メッセージを出して呼出し元へ戻ります。","lane":"main","row":11,"x":350,"y":988,"w":190,"h":46},{"id":"eof","type":"proc","label":"EOFを記録","sub":"作業領域は直前の取引","lines":[[207,209],[216,217]],"orig":"MOVE 'Y' TO END-OF-DAILY-TRANS-FILE","desc":"EOFフラグを 'Y' にします。READ … INTO はEOFでは作業領域を書き換えないので、直前に読んだ取引が残ったままです。このまま索引の照合へ進みます。","lane":"left","row":4,"kind":"warn","x":130,"y":386,"w":180,"h":50},{"id":"abend","type":"term","label":"異常終了","sub":"ABEND 999","lines":[[218,222],[469,488]],"orig":"Z-DISPLAY-IO-STATUS → Z-ABEND-PROGRAM","desc":"エラーメッセージとファイル状態を表示し、CEE3ABD でアベンドコード999の異常終了をします。ファイルは閉じません。","lane":"right","row":3,"kind":"err","x":615,"y":300,"w":180,"h":46},{"id":"skip","type":"proc","label":"カード未登録","sub":"表示して次の取引へ","lines":[[180,184],[232,233]],"orig":"COULD NOT BE VERIFIED","desc":"カード番号と取引IDを表示し、その取引の口座照合は行いません。件数の集計や別ファイルへの出力はありません。","lane":"right","row":6,"kind":"err","x":615,"y":558,"w":180,"h":50},{"id":"noacct","type":"proc","label":"口座未登録","sub":"ACCOUNT … NOT FOUND","lines":[[178,179],[246,247]],"orig":"INVALID ACCOUNT NUMBER FOUND","desc":"口座IDを表示して次の取引へ進みます。","lane":"right","row":8,"kind":"err","x":615,"y":730,"w":180,"h":50}],"edges":[{"from":"start","to":"open","pts":[[350,65.0],[350,102.0]]},{"from":"open","to":"read","pts":[[350,154.0],[350,188.0]]},{"from":"read","to":"rres","pts":[[350,240.0],[350,265.0]]},{"from":"rres","to":"disp","label":"正常 00","pts":[[350,335.0],[350,361.0]],"labelAt":[358,349.0,"start"]},{"from":"rres","to":"eof","label":"EOF 10","kind":"warn","pts":[[240.0,300],[130,300],[130,361.0]],"labelAt":[234.0,292,"end"]},{"from":"rres","to":"abend","label":"それ以外","kind":"err","pts":[[460.0,300],[525.0,300]],"labelAt":[466.0,292,"start"]},{"from":"disp","to":"xref","pts":[[350,411.0],[350,446.0]]},{"from":"eof","to":"xref","kind":"warn","pts":[[130,411.0],[130,472],[240.0,472]]},{"from":"xref","to":"xres","pts":[[350,498.0],[350,523.0]]},{"from":"xres","to":"acct","label":"あり","pts":[[350,593.0],[350,618.0]],"labelAt":[358,607.0,"start"]},{"from":"xres","to":"skip","label":"なし","kind":"err","pts":[[460.0,558],[525.0,558]],"labelAt":[466.0,550,"start"]},{"from":"acct","to":"ares","pts":[[350,670.0],[350,695.0]]},{"from":"ares","to":"loop","label":"あり","pts":[[350,765.0],[350,781.0]],"labelAt":[358,779.0,"start"]},{"from":"ares","to":"noacct","label":"なし","kind":"err","pts":[[460.0,730],[525.0,730]],"labelAt":[466.0,722,"start"]},{"from":"skip","to":"loop","kind":"err","pts":[[705.0,558],[730.0,558],[730.0,816],[460.0,816]]},{"from":"noacct","to":"loop","kind":"err","pts":[[705.0,730],[730.0,730],[730.0,816],[460.0,816]]},{"from":"loop","to":"close","label":"はい","pts":[[350,851.0],[350,876.0]],"labelAt":[358,865.0,"start"]},{"from":"loop","to":"read","label":"いいえ（次の1件）","pts":[[240.0,816],[18,816],[18,214],[240.0,214]],"labelAt":[234.0,808,"end"]},{"from":"close","to":"end","pts":[[350,928.0],[350,965.0]]},{"from":"open","to":"abend","label":"OPEN失敗","kind":"err","dash":true,"pts":[[460.0,128],[615,128],[615,277.0]],"labelAt":[466.0,120,"start"]},{"from":"close","to":"abend","label":"CLOSE失敗","kind":"err","dash":true,"pts":[[460.0,902],[752.0,902],[752.0,300],[705.0,300]],"labelAt":[466.0,894,"start"]}],"notes":[{"lane":"left","row":6,"title":"読み違えやすい点","lines":["EOFでも作業領域には","直前の取引が残るため、","最後の1件をもう一度","照合してから終わる。"],"x":45,"y":520,"w":170,"h":106}],"routines":{"open":{"columns":["段落","ファイル","表示する状態","失敗時のメッセージ"],"rows":[["0000-DALYTRAN-OPEN","日次取引","DALYTRAN-STATUS","ERROR OPENING DAILY TRANSACTION FILE"],["0100-CUSTFILE-OPEN","顧客","CUSTFILE-STATUS","ERROR OPENING CUSTOMER FILE"],["0200-XREFFILE-OPEN","カード索引","XREFFILE-STATUS","ERROR OPENING CROSS REF FILE"],["0300-CARDFILE-OPEN","カード","CARDFILE-STATUS","ERROR OPENING CARD FILE"],["0400-ACCTFILE-OPEN","口座","ACCTFILE-STATUS","ERROR OPENING ACCOUNT FILE"],["0500-TRANFILE-OPEN","取引","TRANFILE-STATUS","ERROR OPENING TRANSACTION FILE"]],"diffRows":[],"sample":[252,269]},"close":{"columns":["段落","ファイル","表示する状態","失敗時のメッセージ"],"rows":[["9000-DALYTRAN-CLOSE","日次取引","CUSTFILE-STATUS","ERROR CLOSING CUSTOMER FILE"],["9100-CUSTFILE-CLOSE","顧客","CUSTFILE-STATUS","ERROR CLOSING CUSTOMER FILE"],["9200-XREFFILE-CLOSE","カード索引","XREFFILE-STATUS","ERROR CLOSING CROSS REF FILE"],["9300-CARDFILE-CLOSE","カード","CARDFILE-STATUS","ERROR CLOSING CARD FILE"],["9400-ACCTFILE-CLOSE","口座","ACCTFILE-STATUS","ERROR CLOSING ACCOUNT FILE"],["9500-TRANFILE-CLOSE","取引","TRANFILE-STATUS","ERROR CLOSING TRANSACTION FILE"]],"diffRows":[0],"sample":[361,378],"highlight":[[372,373]],"note":"9000-DALYTRAN-CLOSE は日次取引を閉じる段落なのに、失敗時に「CUSTOMER FILE」と表示し、顧客ファイルの状態を出します（372〜373行）。原本の誤りか意図かは未確認です。"}},"size":[776.0,1035.0]},"dfd":{"externals":[{"id":"E1","name":"前工程","sub":"日次取引を作成","x":10,"y":40,"w":170,"h":52,"desc":"日次取引ファイルを作るジョブや業務です。JCLが無いため、どのジョブかは未確認です。"},{"id":"E2","name":"運用担当","sub":"ジョブログを確認","x":800,"y":375,"w":170,"h":52,"desc":"標準出力（SYSOUT）に出た照合結果を見る人です。誰が・いつ見るかは未確認です。"}],"processes":[{"id":"P1","name":["日次取引を","読む"],"x":320,"y":200,"nodes":["read","rres","eof"],"para":"1000-DALYTRAN-GET-NEXT","desc":"日次取引を先頭から1件ずつ読み、取引レコードとして後続へ渡します。"},{"id":"P2","name":["カードを","照合する"],"x":520,"y":200,"nodes":["xref","xres","skip"],"para":"2000-LOOKUP-XREF","desc":"取引のカード番号でカード索引を引き、口座IDと顧客IDを得ます。見つからなければその取引を飛ばします。"},{"id":"P3","name":["口座を","照合する"],"x":740,"y":200,"nodes":["acct","ares","noacct"],"para":"3000-READ-ACCOUNT","desc":"索引で得た口座IDで口座マスターを引き、口座があるかを確認します。"},{"id":"P4","name":["照合結果を","出力する"],"x":520,"y":400,"nodes":["disp","skip","noacct"],"para":"MAIN-PARA・2000・3000 の DISPLAY","desc":"取引レコード、索引の内容、未登録のメッセージを標準出力に出します。原本では独立した段落ではなく、各所の DISPLAY 文に分かれています。"}],"stores":{"DALYTRAN":[10,178],"XREFFILE":[430,40],"ACCTFILE":[650,40],"CUSTFILE":[10,330],"CARDFILE":[10,388],"TRANFILE":[10,446]},"flows":[{"id":"F0","from":"E:E1","to":"D:DALYTRAN","name":"日次取引","items":["DALYTRAN.DALYTRAN-ID","DALYTRAN.DALYTRAN-TYPE-CD","DALYTRAN.DALYTRAN-CAT-CD","DALYTRAN.DALYTRAN-SOURCE","DALYTRAN.DALYTRAN-DESC","DALYTRAN.DALYTRAN-AMT","DALYTRAN.DALYTRAN-MERCHANT-ID","DALYTRAN.DALYTRAN-MERCHANT-NAME","DALYTRAN.DALYTRAN-MERCHANT-CITY","DALYTRAN.DALYTRAN-MERCHANT-ZIP","DALYTRAN.DALYTRAN-CARD-NUM","DALYTRAN.DALYTRAN-ORIG-TS","DALYTRAN.DALYTRAN-PROC-TS","DALYTRAN.FILLER"],"lines":[],"est":true,"note":"前工程が日次取引ファイルを作ると推定しています（JCL未入手）。","labelAnchor":"start","labelOffset":[8,4]},{"id":"F1","from":"D:DALYTRAN","to":"P:P1","name":"日次取引レコード","items":["DALYTRAN.DALYTRAN-ID","DALYTRAN.DALYTRAN-TYPE-CD","DALYTRAN.DALYTRAN-CAT-CD","DALYTRAN.DALYTRAN-SOURCE","DALYTRAN.DALYTRAN-DESC","DALYTRAN.DALYTRAN-AMT","DALYTRAN.DALYTRAN-MERCHANT-ID","DALYTRAN.DALYTRAN-MERCHANT-NAME","DALYTRAN.DALYTRAN-MERCHANT-CITY","DALYTRAN.DALYTRAN-MERCHANT-ZIP","DALYTRAN.DALYTRAN-CARD-NUM","DALYTRAN.DALYTRAN-ORIG-TS","DALYTRAN.DALYTRAN-PROC-TS","DALYTRAN.FILLER"],"lines":[[203,203]],"note":"READ … INTO でレコード全体を作業領域へ移します。","labelOffset":[-22,42]},{"id":"F2","from":"P:P1","to":"P:P2","name":"カード番号","items":["DALYTRAN.DALYTRAN-CARD-NUM"],"lines":[[171,171]],"note":"DALYTRAN-CARD-NUM を XREF-CARD-NUM へ移して、索引のキーにします。","labelOffset":[0,-8]},{"id":"F3","from":"D:XREFFILE","to":"P:P2","name":"カード索引レコード","items":["XREFFILE.XREF-CARD-NUM","XREFFILE.XREF-CUST-ID","XREFFILE.XREF-ACCT-ID"],"lines":[[228,230]],"labelAnchor":"start","labelOffset":[8,4]},{"id":"F4","from":"P:P2","to":"P:P3","name":"口座ID","items":["XREFFILE.XREF-ACCT-ID","ACCTFILE.ACCT-ID"],"lines":[[175,175]],"note":"XREF-ACCT-ID を ACCT-ID へ移して、口座マスターのキーにします。","labelOffset":[0,-8]},{"id":"F5","from":"D:ACCTFILE","to":"P:P3","name":"口座レコード","items":["ACCTFILE.ACCT-ID"],"lines":[[242,244]],"note":"レコード全体を読みますが、使うのは口座IDだけです。残高や限度額は使いません。","labelAnchor":"start","labelOffset":[8,4]},{"id":"F6","from":"P:P1","to":"P:P4","name":"取引レコード","items":["DALYTRAN.DALYTRAN-ID","DALYTRAN.DALYTRAN-TYPE-CD","DALYTRAN.DALYTRAN-CAT-CD","DALYTRAN.DALYTRAN-SOURCE","DALYTRAN.DALYTRAN-DESC","DALYTRAN.DALYTRAN-AMT","DALYTRAN.DALYTRAN-MERCHANT-ID","DALYTRAN.DALYTRAN-MERCHANT-NAME","DALYTRAN.DALYTRAN-MERCHANT-CITY","DALYTRAN.DALYTRAN-MERCHANT-ZIP","DALYTRAN.DALYTRAN-CARD-NUM","DALYTRAN.DALYTRAN-ORIG-TS","DALYTRAN.DALYTRAN-PROC-TS","DALYTRAN.FILLER"],"lines":[[168,168]],"labelAnchor":"end","labelOffset":[-8,0]},{"id":"F7","from":"P:P2","to":"P:P4","name":"カード照合結果","items":["DALYTRAN.DALYTRAN-CARD-NUM","DALYTRAN.DALYTRAN-ID","XREFFILE.XREF-CARD-NUM","XREFFILE.XREF-ACCT-ID","XREFFILE.XREF-CUST-ID"],"lines":[[181,183],[236,238]],"labelAnchor":"start","labelOffset":[8,0]},{"id":"F8","from":"P:P3","to":"P:P4","name":"口座照合結果","items":["ACCTFILE.ACCT-ID"],"lines":[[178,178]],"labelAnchor":"start","labelOffset":[18,16]},{"id":"F9","from":"P:P4","to":"E:E2","name":"照合結果リスト","items":[],"lines":[],"note":"表示用の文字列です。項目としての定義はありません。","labelOffset":[0,-8]}]},"errors":[{"event":"ファイルを開けない","where":"0000〜0500","cond":"状態 ≠ '00'","output":"ERROR OPENING …（ファイルごと）","after":"ABEND 999。残りのファイルは開かない","level":"err","node":"open"},{"event":"日次取引の読込エラー","where":"1000","cond":"状態が '00'・'10' 以外","output":"ERROR READING DAILY TRANSACTION FILE","after":"ABEND 999。ファイルは閉じない","level":"err","node":"abend"},{"event":"日次取引のEOF","where":"1000","cond":"状態 = '10'","output":"なし","after":"最後の1件をもう一度照合してから終了","level":"warn","node":"eof"},{"event":"カードが索引に無い","where":"2000","cond":"INVALID KEY","output":"CARD NUMBER … COULD NOT BE VERIFIED","after":"その取引を飛ばして次へ","level":"none","node":"skip"},{"event":"口座がマスターに無い","where":"3000","cond":"INVALID KEY","output":"ACCOUNT … NOT FOUND","after":"次の取引へ","level":"none","node":"noacct"},{"event":"索引・口座の読込で INVALID KEY 以外のエラー","where":"2000, 3000","cond":"判定なし","output":"なし","after":"続行するかどうか未確認（USE宣言なし）","level":"warn","node":"xres"},{"event":"ファイルを閉じられない","where":"9000〜9500","cond":"状態 ≠ '00'","output":"ERROR CLOSING …","after":"ABEND 999。日次取引だけ表示内容が食い違う","level":"err","node":"close"}],"patterns":{"sample":{"name":"同梱サンプル3件","note":"sample/dailytran.txt の3件。照合成功・カード未登録・口座未登録を1件ずつ含みます。","steps":[{"node":"start","info":"プログラム開始","log":["START OF EXECUTION OF PROGRAM CBTRN01C"],"ws":{"eof":"N"}},{"node":"open","edge":"start>open","info":"6ファイルを開く（すべて '00'）"},{"node":"read","edge":"open>read","info":"1件目を読む","ws":{"tran":"0000000000000101","card":"0000000000000011","status":"00"}},{"node":"rres","edge":"read>rres","info":"ファイル状態 '00'：正常"},{"node":"disp","edge":"rres>disp","info":"取引レコードを表示","log":["000000000000010101000 1POS       Sample purchase A … (カード 0000000000000011)"]},{"node":"xref","edge":"disp>xref","info":"カード 0000000000000011 で索引を引く","ws":{"acct":"00000000001","cust":"000000001"}},{"node":"xres","edge":"xref>xres","info":"索引にあり","log":["SUCCESSFUL READ OF XREF","CARD NUMBER: 0000000000000011","ACCOUNT ID : 00000000001","CUSTOMER ID: 000000001"]},{"node":"acct","edge":"xres>acct","info":"口座 00000000001 で口座マスターを引く"},{"node":"ares","edge":"acct>ares","info":"口座あり：照合成功","log":["SUCCESSFUL READ OF ACCOUNT FILE"]},{"node":"loop","edge":"ares>loop","info":"EOFではないので次の1件へ"},{"node":"read","edge":"loop>read","info":"2件目を読む","ws":{"tran":"0000000000000102","card":"0000000000000099","status":"00"}},{"node":"rres","edge":"read>rres","info":"ファイル状態 '00'：正常"},{"node":"disp","edge":"rres>disp","info":"取引レコードを表示","log":["000000000000010201000 1POS       Sample purchase B … (カード 0000000000000099)"]},{"node":"xref","edge":"disp>xref","info":"カード 0000000000000099 で索引を引く","ws":{"acct":"—","cust":"—"}},{"node":"xres","edge":"xref>xres","info":"索引に無い","log":["INVALID CARD NUMBER FOR XREF"]},{"node":"skip","edge":"xres>skip","info":"カード未登録を表示してスキップ","log":["CARD NUMBER 0000000000000099 COULD NOT BE VERIFIED. SKIPPING TRANSACTION ID-0000000000000102"]},{"node":"loop","edge":"skip>loop","info":"EOFではないので次の1件へ"},{"node":"read","edge":"loop>read","info":"3件目を読む","ws":{"tran":"0000000000000103","card":"0000000000000022","status":"00"}},{"node":"rres","edge":"read>rres","info":"ファイル状態 '00'：正常"},{"node":"disp","edge":"rres>disp","info":"取引レコードを表示","log":["000000000000010301000 1POS       Sample purchase C … (カード 0000000000000022)"]},{"node":"xref","edge":"disp>xref","info":"カード 0000000000000022 で索引を引く","ws":{"acct":"00000000002","cust":"000000002"}},{"node":"xres","edge":"xref>xres","info":"索引にあり","log":["SUCCESSFUL READ OF XREF","CARD NUMBER: 0000000000000022","ACCOUNT ID : 00000000002","CUSTOMER ID: 000000002"]},{"node":"acct","edge":"xres>acct","info":"口座 00000000002 で口座マスターを引く"},{"node":"ares","edge":"acct>ares","info":"口座マスターに無い","log":["INVALID ACCOUNT NUMBER FOUND"]},{"node":"noacct","edge":"ares>noacct","info":"口座未登録を表示","log":["ACCOUNT 00000000002 NOT FOUND"]},{"node":"loop","edge":"noacct>loop","info":"EOFではないので次の1件へ"},{"node":"read","edge":"loop>read","info":"4回目の読込でEOF","ws":{"status":"10"}},{"node":"rres","edge":"read>rres","info":"ファイル状態 '10'：EOF"},{"node":"eof","edge":"rres>eof","info":"EOFを記録。作業領域には3件目が残っている","ws":{"eof":"Y"},"flag":"warn"},{"node":"xref","edge":"eof>xref","info":"3件目のカードでもう一度索引を引く","flag":"warn"},{"node":"xres","edge":"xref>xres","info":"索引にあり（2回目）","log":["SUCCESSFUL READ OF XREF","CARD NUMBER: 0000000000000022","ACCOUNT ID : 00000000002","CUSTOMER ID: 000000002"],"flag":"warn"},{"node":"acct","edge":"xres>acct","info":"口座 00000000002 をもう一度引く","flag":"warn"},{"node":"ares","edge":"acct>ares","info":"口座マスターに無い（2回目）","log":["INVALID ACCOUNT NUMBER FOUND"],"flag":"warn"},{"node":"noacct","edge":"ares>noacct","info":"同じメッセージが2回出る","log":["ACCOUNT 00000000002 NOT FOUND"],"flag":"warn"},{"node":"loop","edge":"noacct>loop","info":"EOFなのでループを抜ける"},{"node":"close","edge":"loop>close","info":"6ファイルを閉じる"},{"node":"end","edge":"close>end","info":"終了","log":["END OF EXECUTION OF PROGRAM CBTRN01C"]}]},"empty":{"name":"空入力（0件）","note":"日次取引が0件のとき。作業領域にVALUE句がないため、原本での初期値は未確認です（ここでは空白と仮定）。","steps":[{"node":"start","info":"プログラム開始","log":["START OF EXECUTION OF PROGRAM CBTRN01C"],"ws":{"eof":"N","tran":"                ","card":"                "}},{"node":"open","edge":"start>open","info":"6ファイルを開く"},{"node":"read","edge":"open>read","info":"1回目の読込でEOF","ws":{"status":"10"}},{"node":"rres","edge":"read>rres","info":"ファイル状態 '10'：EOF"},{"node":"eof","edge":"rres>eof","info":"EOFを記録。作業領域は初期値のまま（原本では未確認）","ws":{"eof":"Y"},"flag":"warn"},{"node":"xref","edge":"eof>xref","info":"空白のカード番号で索引を引く","ws":{"acct":"—","cust":"—"},"flag":"warn"},{"node":"xres","edge":"xref>xres","info":"索引に無い","log":["INVALID CARD NUMBER FOR XREF"],"flag":"warn"},{"node":"skip","edge":"xres>skip","info":"取引が無いのにスキップのメッセージが出る","log":["CARD NUMBER                  COULD NOT BE VERIFIED. SKIPPING TRANSACTION ID-                "],"flag":"warn"},{"node":"loop","edge":"skip>loop","info":"EOFなのでループを抜ける"},{"node":"close","edge":"loop>close","info":"6ファイルを閉じる"},{"node":"end","edge":"close>end","info":"終了","log":["END OF EXECUTION OF PROGRAM CBTRN01C"]}]},"ioerr":{"name":"読込エラー","note":"日次取引の読込でファイル状態30（永続エラー）が返った例です。","steps":[{"node":"start","info":"プログラム開始","log":["START OF EXECUTION OF PROGRAM CBTRN01C"],"ws":{"eof":"N"}},{"node":"open","edge":"start>open","info":"6ファイルを開く"},{"node":"read","edge":"open>read","info":"読込でファイル状態30","ws":{"status":"30"}},{"node":"rres","edge":"read>rres","info":"'00' でも '10' でもない：読込エラー"},{"node":"abend","edge":"rres>abend","info":"ファイル状態を表示してアベンド。ファイルは閉じない","log":["ERROR READING DAILY TRANSACTION FILE","FILE STATUS IS: NNNN0030","ABENDING PROGRAM"],"flag":"err"}]}},"workArea":{"tran":"取引ID","card":"カード番号","acct":"口座ID","cust":"顧客ID","status":"ファイル状態","eof":"EOFフラグ"},"openItems":["JCL・ジョブ定義：起動条件、前後のジョブ、DD名に割り当てる実ファイル","空入力時の作業領域の初期値（VALUE句なし）","索引・口座の読込で INVALID KEY 以外のエラーが起きたときの動作","顧客・カード・取引の3ファイルを開くだけで使わない理由","9000-DALYTRAN-CLOSE の表示内容の食い違い","照合結果（標準出力）を誰が・どう使うか"]};
+/* バッチ設計ビューワー共通の部品。各テンプレートは VIEWS・R・goSel・afterRender・chipLabel を定義してから startApp() を呼ぶ。 */
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const sp = (k) => { const i = k.indexOf(":"); return [k.slice(0, i), k.slice(i + 1)]; };
+const isComment = (t) => t.length > 6 && (t[6] === "*" || t[6] === "/");
+const mergeLines = (ls) => ls.reduce((acc, i) => { const last = acc[acc.length - 1]; if (last && i === last[1] + 1) last[1] = i; else acc.push([i, i]); return acc; }, []);
+const pill = (cls, text) => `<span class="pill ${cls}">${esc(text)}</span>`;
+
+/* ソースの抜粋。kind が "cobol" なら1〜6桁目（連番）を省いて表示する */
+function srcBlock(lines, ranges, hl = [], kind = "cobol") {
+  const hlset = new Set();
+  hl.forEach(([a, b]) => { for (let i = a; i <= b; i++) hlset.add(i); });
+  let out = "";
+  ranges.forEach(([a, b], k) => {
+    if (k) out += `<span class="src-gap">⋮</span>`;
+    for (let i = Math.max(1, a); i <= Math.min(lines.length, b); i++) {
+      const t = (lines[i - 1] || "").replace(/\s+$/, "");
+      const body = kind === "cobol" ? t.slice(6) : t;
+      const cm = kind === "cobol" ? isComment(t) : t.startsWith("//*");
+      out += `<span class="ln${cm ? " cm" : ""}"${hlset.has(i) ? ' style="background:var(--hl)"' : ""}><span class="no">${i}</span>${esc(body || " ")}</span>`;
+    }
+  });
+  return `<pre class="src">${out}</pre>`;
+}
+
+/* つながり欄。rows は [見出し, キーの配列] */
+function chips(keys, max = 8) {
+  const one = (k) => `<button class="chip" data-go="${esc(k)}">${esc(chipLabel(k))}</button>`;
+  let h = keys.slice(0, max).map(one).join("");
+  if (keys.length > max) h += `<details class="more"><summary>ほか${keys.length - max}件</summary>${keys.slice(max).map(one).join("")}</details>`;
+  return h;
+}
+function relBox(rows) {
+  return `<div class="rel"><b class="rh">つながり</b>${rows.map(([lab, ks]) => `<div class="relrow"><span class="rl">${esc(lab)}</span><div class="chips">${ks.length ? chips(ks) : '<span class="none">なし</span>'}</div></div>`).join("")}</div>`;
+}
+
+/* DFD。D = { width, height, nodes: [{key, shape:"circle"|"rect"|"store", x, y, w, h, title, lines, sub, no, cls}], flows: [{key, from, to, label, cls, offset, la, lo}] } */
+function dfdSvg(D, selKey) {
+  const byKey = Object.fromEntries(D.nodes.map(n => [n.key, n]));
+  const on = new Set(), near = new Set();
+  const [st] = sp(selKey);
+  D.flows.forEach(f => { if (st === "F" ? f.key === selKey : (f.from === selKey || f.to === selKey)) { on.add(f.key); near.add(f.from); near.add(f.to); } });
+  const clip = (n, tx, ty) => {
+    const dx = tx - n.x, dy = ty - n.y, len = Math.hypot(dx, dy) || 1;
+    if (n.shape === "circle") return [n.x + dx / len * n.r, n.y + dy / len * n.r];
+    const k = Math.min(n.w / 2 / Math.abs(dx || 1e-9), n.h / 2 / Math.abs(dy || 1e-9));
+    return [n.x + dx * k, n.y + dy * k];
+  };
+  let s = `<svg class="dfd" viewBox="0 0 ${D.width} ${D.height}" style="width:100%;min-width:${Math.min(D.width, D.minWidth || 660)}px;max-width:${D.width}px;height:auto;display:block" role="img" aria-label="DFD">
+  <defs>${["dah", "dah-on"].map(m => `<marker id="${m}" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(${m === "dah" ? "--muted" : "--accent"})"/></marker>`).join("")}</defs>`;
+  D.flows.forEach(f => {
+    const a = byKey[f.from], b = byKey[f.to];
+    let p1 = clip(a, b.x, b.y), p2 = clip(b, a.x, a.y);
+    if (f.offset) {
+      const dx = p2[0] - p1[0], dy = p2[1] - p1[1], len = Math.hypot(dx, dy) || 1, ox = -dy / len * f.offset, oy = dx / len * f.offset;
+      p1 = [p1[0] + ox, p1[1] + oy]; p2 = [p2[0] + ox, p2[1] + oy];
+    }
+    const t = f.lt ?? 0.5;
+    const mx = p1[0] + (p2[0] - p1[0]) * t + (f.lo?.[0] || 0), my = p1[1] + (p2[1] - p1[1]) * t + (f.lo?.[1] || 0), o = on.has(f.key);
+    const ln = `x1="${p1[0]}" y1="${p1[1]}" x2="${p2[0]}" y2="${p2[1]}"`;
+    s += `<g data-k="${f.key}" class="flow ${o ? "on" : ""} ${f.key === selKey ? "sel" : ""}"><line class="hit" ${ln}/><line class="fl ${f.cls || ""}" ${ln} marker-end="url(#${o ? "dah-on" : "dah"})"/>
+      ${f.label ? `<text class="flab" x="${mx}" y="${my}" text-anchor="${f.la || "middle"}">${esc(f.label)}</text>` : ""}</g>`;
+  });
+  D.nodes.forEach(n => {
+    const cls = `${n.cls || ""} ${n.key === selKey ? "sel" : near.has(n.key) ? "rel" : ""}`;
+    if (n.shape === "circle") {
+      s += `<g data-k="${n.key}" class="proc ${cls}"><circle class="shape" cx="${n.x}" cy="${n.y}" r="${n.r}"/>
+        <text class="sub" x="${n.x}" y="${n.y - 24}" text-anchor="middle">${esc(n.no)}</text>
+        ${n.lines.map((l, i) => `<text x="${n.x}" y="${n.y - 2 + i * 18 - (n.lines.length - 2) * 9}" text-anchor="middle" font-size="13" font-weight="500">${esc(l)}</text>`).join("")}
+        ${n.sub ? `<text class="sub" x="${n.x}" y="${n.y + 34}" text-anchor="middle">${esc(n.sub)}</text>` : ""}</g>`;
+    } else if (n.shape === "rect") {
+      s += `<g data-k="${n.key}" class="ext ${cls}"><rect class="shape" x="${n.x - n.w / 2}" y="${n.y - n.h / 2}" width="${n.w}" height="${n.h}"/>
+        <text x="${n.x}" y="${n.y - 4}" text-anchor="middle" font-size="13" font-weight="500">${esc(n.no + " " + n.title)}</text>
+        <text class="sub" x="${n.x}" y="${n.y + 13}" text-anchor="middle">${esc(n.sub || "")}</text></g>`;
+    } else {
+      const x = n.x - n.w / 2, y = n.y - 22, w = n.w;
+      s += `<g data-k="${n.key}" class="store ${cls}"><rect class="bg" x="${x}" y="${y}" width="${w}" height="44"/>
+        <line class="sl" x1="${x}" y1="${y}" x2="${x + w}" y2="${y}"/><line class="sl" x1="${x}" y1="${y + 44}" x2="${x + w}" y2="${y + 44}"/>
+        <line class="sl" x1="${x}" y1="${y}" x2="${x}" y2="${y + 44}"/><line class="sl" x1="${x + 36}" y1="${y}" x2="${x + 36}" y2="${y + 44}"/>
+        <text x="${x + 18}" y="${y + 27}" text-anchor="middle" font-size="12.5" font-weight="500">${esc(n.no)}</text>
+        <text x="${x + 46}" y="${y + 20}" font-size="12.5" font-weight="500">${esc(n.title)}</text>
+        <text class="sub" x="${x + 46}" y="${y + 35}">${esc(n.sub || "")}</text></g>`;
+    }
+  });
+  return s + `</svg>`;
+}
+
+/* レコードレイアウトの帯 */
+function layoutBar(fields, len, name, useCls) {
+  const sc = 600 / len;
+  let bar = `<svg class="lay" viewBox="0 0 600 40" style="width:100%;height:auto;display:block" role="img" aria-label="${esc(name)}のレコードレイアウト">`;
+  fields.forEach(f => {
+    bar += `<rect class="${useCls(f)}" x="${(f.pos[0] - 1) * sc}" y="4" width="${Math.max((f.pos[1] - f.pos[0] + 1) * sc, 1)}" height="22" data-go="I:${f.item}"><title>${f.pos[0]}–${f.pos[1]} ${esc(f.name)}（${esc(f.meaning)}）</title></rect>`;
+  });
+  return bar + `<text class="sub" x="0" y="38">1</text><text class="sub" x="600" y="38" text-anchor="end">${len}バイト</text></svg>`;
+}
+
+/* 画面の切替 */
+function render() {
+  $("#rail").innerHTML = VIEWS.map((v, i) => `<li><button data-v="${v.id}" aria-current="${v.id === state.view}"><span class="n">${i + 1}</span><span class="t">${esc(v.t)}</span><span class="d">${esc(v.d)}</span></button></li>`).join("");
+  $("#main").innerHTML = R[state.view]();
+  afterRender();
+}
+function show(v) {
+  state.view = v;
+  if (location.hash !== "#" + v) history.replaceState(null, "", "#" + v);
+  render();
+  window.scrollTo({ top: 0 });
+}
+function startApp() {
+  document.addEventListener("click", e => {
+    const g = e.target.closest("[data-go]"); if (g) { goSel(g.dataset.go); return; }
+    const b = e.target.closest("[data-v]"); if (b) show(b.dataset.v);
+  });
+  window.addEventListener("hashchange", () => { const v = location.hash.slice(1); if (R[v] && v !== state.view) { state.view = v; render(); } });
+  const v = location.hash.slice(1); if (R[v]) state.view = v;
+  render();
+}
+
+
+/* ---------- データ ---------- */
+const SRC = V.source;
+const NODES = V.flow.nodes, NB = Object.fromEntries(NODES.map(n => [n.id, n]));
+const STORES = V.stores, SB = Object.fromEntries(STORES.map(s => [s.dd, s]));
+const FIELDS = V.fields, LOG = V.items, IB = Object.fromEntries(LOG.map(i => [i.id, i]));
+const DFD = V.dfd;
+const PB = Object.fromEntries(DFD.processes.map(p => [p.id, p]));
+const EB = Object.fromEntries(DFD.externals.map(e => [e.id, e]));
+const FB = Object.fromEntries(DFD.flows.map(f => [f.id, f]));
+const PATTERNS = V.patterns;
+const USE_PILL = { "個別参照": "ok", "レコード一括": "rec", "定義のみ": "none" };
+const isSide = (id) => NB[id].lane !== "main";
+const useLabel = (s) => {
+  const c = s.crud;
+  if (c === "O") return "開閉のみ";
+  return c.split("").map(x => x === "R" ? (s.access === "順次" ? "R（全件）" : "R（キー）") : `${x}（${{ C: "作成", U: "更新", D: "削除" }[x]}）`).join(" ");
+};
+
+const VIEWS = [
+  { id: "overview", t: "概要と合意事項", d: "何のためのバッチか。何が決まり、何が未確認か" },
+  { id: "jobflow", t: "ジョブフロー", d: "前後のジョブと、入出力ファイル" },
+  { id: "dfd", t: "DFD", d: "データがどこから来て、どこへ行くか" },
+  { id: "db", t: "DB・ファイル一覧", d: "データストアとレコードレイアウト" },
+  { id: "items", t: "データ項目定義", d: "項目の意味・型・格納先・使用箇所" },
+  { id: "flow", t: "処理フロー", d: "骨格と正常系。図を押すと根拠コード" },
+  { id: "errors", t: "例外と異常系", d: "失敗したら、どこへ進み何が出るか" },
+  { id: "trace", t: "処理パターン", d: "サンプル入力で1ステップずつたどる" },
+  { id: "coverage", t: "網羅と未確認", d: "図から漏れた行と、残りの確認事項" },
+];
+const state = {
+  view: "overview", sel: (NODES.find(n => n.type === "pre" && n.lane === "main" && !n.routine) || NODES[0]).id, showErr: true,
+  pattern: Object.keys(PATTERNS)[0], step: 0, itemFilter: "all",
+  selBy: { dfd: "P:" + (DFD.processes[1] || DFD.processes[0]).id, db: "D:" + (STORES.find(s => s.crud !== "O") || STORES[0]).dd, items: "I:" + LOG[0].id },
+};
+
+/* ---------- つながり ---------- */
+function nodesOfLines(ranges) {
+  const s = new Set();
+  ranges.forEach(([a, b]) => { for (let i = a; i <= b; i++) NODES.forEach(n => { if (n.lines.some(([x, y]) => i >= x && i <= y)) s.add(n.id); }); });
+  return s;
+}
+function related(k) {
+  const [t, id] = sp(k), out = { P: new Set(), F: new Set(), E: new Set(), D: new Set(), I: new Set(), N: new Set() };
+  const addFlow = (f) => { out.F.add(f.id); [f.from, f.to].forEach(r => { const [tt, ii] = sp(r); out[tt].add(ii); }); };
+  const addItems = (keys) => keys.forEach(fk => out.I.add(FIELDS[fk].item));
+  if (t === "P" || t === "D" || t === "E") DFD.flows.filter(f => f.from === k || f.to === k).forEach(f => { addFlow(f); addItems(f.items); });
+  if (t === "P") PB[id].nodes.forEach(n => out.N.add(n));
+  if (t === "D") SB[id].nodes.forEach(n => out.N.add(n));
+  if (t === "F") { addFlow(FB[id]); addItems(FB[id].items); nodesOfLines(FB[id].lines || []).forEach(n => out.N.add(n)); }
+  if (t === "I") {
+    const it = IB[id];
+    it.fields.forEach(fk => out.D.add(FIELDS[fk].store));
+    DFD.flows.filter(f => f.items.some(x => it.fields.includes(x))).forEach(addFlow);
+    nodesOfLines(it.fields.flatMap(fk => FIELDS[fk].direct.map(i => [i, i]))).forEach(n => out.N.add(n));
+  }
+  if (t === "N") {
+    const n = NB[id];
+    DFD.processes.filter(p => p.nodes.includes(id)).forEach(p => out.P.add(p.id));
+    STORES.filter(s => s.nodes.includes(id)).forEach(s => out.D.add(s.dd));
+    Object.values(FIELDS).filter(f => f.direct.some(i => n.lines.some(([a, b]) => i >= a && i <= b))).forEach(f => out.I.add(f.item));
+    DFD.flows.filter(f => (f.lines || []).some(([a, b]) => n.lines.some(([x, y]) => a <= y && b >= x))).forEach(f => out.F.add(f.id));
+  }
+  out[t].delete(id);
+  return out;
+}
+function chipLabel(k) {
+  const [t, id] = sp(k);
+  if (t === "P") return `${id} ${PB[id].name.join("")}`;
+  if (t === "F") return `${id} ${FB[id].name}`;
+  if (t === "E") return `${id} ${EB[id].name}`;
+  if (t === "D") return `${SB[id].no} ${SB[id].name}`;
+  if (t === "I") return `${id} ${IB[id].name}`;
+  return NB[id].label;
+}
+const ORDER = (k) => { const [t, id] = sp(k); return t === "N" ? String(NODES.findIndex(n => n.id === id)).padStart(3, "0") : t === "D" ? SB[id].no : id; };
+const sorted = (keys) => [...keys].sort((a, b) => ORDER(a) < ORDER(b) ? -1 : 1);
+function relHtml(k) {
+  const r = related(k);
+  return relBox([
+    ["DFD", sorted([...[...r.P].map(x => "P:" + x), ...[...r.F].map(x => "F:" + x), ...[...r.E].map(x => "E:" + x)])],
+    ["DB・ファイル", sorted([...r.D].map(x => "D:" + x))],
+    ["データ項目", sorted([...r.I].map(x => "I:" + x))],
+    ["処理フロー", sorted([...r.N].map(x => "N:" + x))],
+  ]);
+}
+function goSel(k) {
+  const [t, id] = sp(k);
+  const view = { P: "dfd", F: "dfd", E: "dfd", D: "db", I: "items", N: "flow" }[t];
+  if (t === "N") state.sel = id; else state.selBy[view] = k;
+  show(view);
+}
+
+/* ---------- 処理フロー図（JIS X 0121 の記号） ---------- */
+function shapeSvg(n) {
+  const x = n.x - n.w / 2, y = n.y - n.h / 2;
+  if (n.type === "dec") return `<polygon class="shape" points="${n.x},${y} ${n.x + n.w / 2},${n.y} ${n.x},${y + n.h} ${x},${n.y}"/>`;
+  if (n.type === "term") return `<rect class="shape" x="${x}" y="${y}" width="${n.w}" height="${n.h}" rx="${n.h / 2}"/>`;
+  let s = `<rect class="shape" x="${x}" y="${y}" width="${n.w}" height="${n.h}" rx="2"/>`;
+  if (n.type === "pre") s += `<line class="pl" x1="${x + 10}" y1="${y}" x2="${x + 10}" y2="${y + n.h}"/><line class="pl" x1="${x + n.w - 10}" y1="${y}" x2="${x + n.w - 10}" y2="${y + n.h}"/>`;
+  return s;
+}
+function flowSvg() {
+  const [w, h] = V.flow.size;
+  let s = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;min-width:560px;max-width:${w}px;height:auto;display:block;margin:0 auto" role="img" aria-label="${esc(V.meta.program)}の処理フロー">
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+  <style>.pl{stroke:var(--ink);stroke-width:1.2}.node.warn .pl{stroke:var(--warn)}.node.err .pl{stroke:var(--err)}</style>`;
+  V.flow.edges.forEach(e => {
+    const id = `${e.from}>${e.to}`;
+    s += `<polyline data-e="${id}" class="edge ${e.kind || ""} ${e.dash ? "dash" : ""}" points="${e.pts.map(p => p.join(",")).join(" ")}" marker-end="url(#ah)"/>`;
+    if (e.label) s += `<text data-el="${id}" class="lbl" x="${e.labelAt[0]}" y="${e.labelAt[1]}" text-anchor="${e.labelAt[2] || "start"}">${esc(e.label)}</text>`;
+  });
+  NODES.forEach(n => {
+    s += `<g class="node ${n.kind || ""} ${n.routine ? "routine" : ""}" data-n="${n.id}" tabindex="0" role="button" aria-label="${esc(n.label)}">${shapeSvg(n)}
+      <text x="${n.x}" y="${n.y + (n.sub ? -3 : 4)}" text-anchor="middle" font-size="${n.type === "dec" ? 12.5 : 13}" font-weight="500">${esc(n.label)}</text>
+      ${n.sub ? `<text class="sub" x="${n.x}" y="${n.y + 13}" text-anchor="middle">${esc(n.sub)}</text>` : ""}</g>`;
+  });
+  (V.flow.notes || []).forEach(nt => {
+    s += `<g class="note"><rect x="${nt.x}" y="${nt.y}" width="${nt.w}" height="${nt.h}" rx="6"/>
+      <text x="${nt.x + 12}" y="${nt.y + 22}" font-weight="700" style="fill:var(--warn)">${esc(nt.title)}</text>
+      ${nt.lines.map((l, i) => `<text x="${nt.x + 12}" y="${nt.y + 44 + i * 18}">${esc(l)}</text>`).join("")}</g>`;
+  });
+  return s + `</svg>`;
+}
+function paintFlow(root) {
+  const t = state.view === "trace" ? PATTERNS[state.pattern].steps : null;
+  const walked = new Set();
+  let cur = null;
+  if (t) { for (let i = 0; i <= state.step; i++) if (t[i].edge) walked.add(t[i].edge); cur = t[state.step].node; }
+  root.querySelectorAll(".node").forEach(g => {
+    const id = g.dataset.n;
+    g.classList.toggle("sel", !t && id === state.sel);
+    g.classList.toggle("cur", id === cur);
+    g.classList.toggle("dim", !state.showErr && isSide(id));
+  });
+  const hide = (a, b, el) => !state.showErr && (isSide(a) || isSide(b) || (el && el.classList.contains("dash")));
+  root.querySelectorAll(".edge").forEach(p => { const [a, b] = p.dataset.e.split(">"); p.classList.toggle("walked", walked.has(p.dataset.e)); p.classList.toggle("dim", hide(a, b, p)); });
+  root.querySelectorAll("[data-el]").forEach(x => { const [a, b] = x.dataset.el.split(">"); x.style.opacity = hide(a, b, root.querySelector(`[data-e="${x.dataset.el}"]`)) ? .2 : 1; });
+  root.querySelectorAll(".note").forEach(n => { n.style.opacity = state.showErr ? 1 : .2; });
+}
+function bindFlow(root, onPick) {
+  root.querySelectorAll(".node").forEach(g => {
+    const pick = () => onPick(g.dataset.n);
+    g.addEventListener("click", pick);
+    g.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(); } });
+  });
+}
+function detailHtml(id) {
+  const n = NB[id];
+  let h = `<div class="dhead"><h3>${esc(n.label)}</h3><span class="orig">${esc(n.orig || "")}</span></div><div class="dbody"><p>${esc(n.desc || "")}</p>`;
+  h += `<div><div class="ranges">${n.lines.map(([a, b]) => `<button data-jump="${a}">${a}〜${b}行</button>`).join("")}</div></div>`;
+  h += relHtml("N:" + id);
+  const rt = n.routine && V.flow.routines[n.routine];
+  if (rt) {
+    h += `<div class="scroll"><table><thead><tr>${rt.columns.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>
+      ${rt.rows.map((r, i) => `<tr class="${(rt.diffRows || []).includes(i) ? "diff" : ""}">${r.map((c, j) => `<td class="${j ? "" : "mono"}">${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    if (rt.note) h += `<div class="callout">${esc(rt.note)}</div>`;
+    h += `<p class="ev">同じ形の段落をまとめて1つの箱にしています。代表として先頭の段落を表示します。</p>`;
+    h += srcBlock(SRC, [rt.sample], rt.highlight || []);
+  } else h += srcBlock(SRC, n.lines);
+  return h + `</div>`;
+}
+
+/* ---------- 各画面 ---------- */
+const R = {};
+R.overview = () => {
+  const o = V.overview;
+  return `<div class="viewhead"><h2>概要と合意事項</h2><span class="doctag">設計書でいうと：バッチ処理一覧・処理概要</span></div>
+  <p class="lead">このバッチが何をするかを1画面で示します。合意が必要な観点ごとに、コードから確認できたこと（根拠あり）と、資料が足りず確認できないこと（未確認）を分けます。</p>
+  <div class="panel docmap"><b>設計書のつながり</b>
+    <div class="dm">
+      <button data-v="dfd"><b>DFD</b><span>P・F・D</span></button><span class="ar">D番号<br>→</span>
+      <button data-v="db"><b>DB・ファイル一覧</b><span>D・DD名</span></button><span class="ar">COPY句<br>→</span>
+      <button data-v="items"><b>データ項目定義</b><span>DI</span></button><span class="ar">使用行<br>→</span>
+      <button data-v="flow"><b>処理フロー</b><span>段落・行範囲</span></button><span class="ar">行番号<br>→</span>
+      <button data-v="coverage"><b>原本コード</b><span>1〜${V.meta.lines}行</span></button>
+    </div>
+    <p class="lead" style="margin:10px 0 0">DFDのプロセス（P）は処理フローの段落に、データフロー（F）は運ぶデータ項目（DI）に、データストア（D）はDB・ファイル一覧の行につながります。どの資料を開いても、右側の「つながり」から他の資料の該当箇所へ移れます。</p>
+  </div>
+  <div class="panel summary">${o.summary.map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join("")}</div>
+  <div class="checks">${o.checks.map(c => `<div class="panel check"><h3>${esc(c.title)}${pill(c.status, c.label)}</h3><p>${esc(c.text)}</p><span class="ev">根拠：${esc(c.evidence)}</span></div>`).join("")}</div>`;
+};
+
+R.jobflow = () => {
+  const c = V.context, ins = STORES.filter(s => /[RO]/.test(s.crud) && !/[CUD]/.test(s.crud)), outs = STORES.filter(s => /[CUD]/.test(s.crud));
+  const outBoxes = [...outs.map(s => ({ name: `${s.no} ${s.name}`, sub: `${s.dd} · ${useLabel(s)}` })), ...(c.outputs || [])];
+  const H = Math.max(430, ins.length * 52 + 120, outBoxes.length * 60 + 120), mid = H / 2;
+  let s = `<svg viewBox="0 0 760 ${H}" style="width:100%;max-width:760px;height:auto;display:block" role="img" aria-label="ジョブフロー">
+  <defs><marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+  <g class="file unknown"><rect x="300" y="12" width="160" height="40" rx="4"/></g>
+  <text x="380" y="30" text-anchor="middle" font-size="12">${esc(c.prev.label)}</text><text class="sub" x="380" y="44" text-anchor="middle">${esc(c.prev.sub)}</text>
+  <polyline class="edge dash" points="380,52 380,${mid - 35}" marker-end="url(#ah2)"/>
+  <g class="prog"><rect x="290" y="${mid - 35}" width="180" height="70" rx="8"/></g>
+  <text x="380" y="${mid - 5}" text-anchor="middle" font-weight="700">${esc(V.meta.program)}</text>
+  <text class="sub" x="380" y="${mid + 13}" text-anchor="middle">${esc(V.meta.title)}</text>
+  <polyline class="edge dash" points="380,${mid + 35} 380,${H - 60}" marker-end="url(#ah2)"/>
+  <g class="file unknown"><rect x="300" y="${H - 60}" width="160" height="40" rx="4"/></g>
+  <text x="380" y="${H - 42}" text-anchor="middle" font-size="12">${esc(c.next.label)}</text><text class="sub" x="380" y="${H - 28}" text-anchor="middle">${esc(c.next.sub)}</text>`;
+  const y0 = mid - (ins.length * 52) / 2;
+  ins.forEach((st, i) => {
+    const y = y0 + i * 52, un = st.crud === "O";
+    s += `<g class="file ${un ? "unused" : ""}" data-go="D:${st.dd}" style="cursor:pointer"><rect x="20" y="${y}" width="170" height="42" rx="4"/>
+      <text x="32" y="${y + 18}" font-size="12.5" font-weight="500">${esc(st.name)}</text>
+      <text class="sub" x="32" y="${y + 33}">${esc(st.dd)} · ${esc(useLabel(st))}</text></g>
+      <polyline class="edge ${un ? "dash" : ""}" points="190,${y + 21} 240,${y + 21} 240,${mid} 290,${mid}" ${un ? "" : 'marker-end="url(#ah2)"'}/>`;
+  });
+  const o0 = mid - (outBoxes.length * 60) / 2;
+  outBoxes.forEach((o, i) => {
+    const y = o0 + i * 60;
+    s += `<g class="file"><rect x="580" y="${y}" width="170" height="46" rx="4"/></g>
+      <text x="665" y="${y + 20}" text-anchor="middle" font-size="12.5" font-weight="500">${esc(o.name)}</text>
+      <text class="sub" x="665" y="${y + 36}" text-anchor="middle">${esc(o.sub)}</text>
+      <polyline class="edge" points="470,${mid} 525,${mid} 525,${y + 23} 580,${y + 23}" marker-end="url(#ah2)"/>`;
+  });
+  s += `</svg>`;
+  return `<div class="viewhead"><h2>ジョブフロー</h2><span class="doctag">設計書でいうと：ジョブフロー図・入出力関連図</span></div>
+  <p class="lead">プログラムを1つの箱として見たときの入出力です。実線は実際に読み書きするファイル、破線は開くだけで中身を読まないファイルです。${V.links.job ? "ジョブ全体のつながりは右上のリンクから開けます。" : ""}</p>
+  <div class="panel scroll" style="padding:12px">${s}</div>
+  ${c.note ? `<div class="section-gap"></div><div class="callout">${esc(c.note)}</div>` : ""}`;
+};
+
+/* DFD */
+function dfdModel() {
+  const nodes = [
+    ...DFD.externals.map(e => ({ key: "E:" + e.id, shape: "rect", x: e.x + e.w / 2, y: e.y + e.h / 2, w: e.w, h: e.h, no: e.id, title: e.name, sub: e.sub })),
+    ...DFD.processes.map(p => ({ key: "P:" + p.id, shape: "circle", x: p.x, y: p.y, r: 56, no: p.id, lines: p.name })),
+    ...STORES.filter(s => DFD.stores[s.dd]).map(s => { const [x, y] = DFD.stores[s.dd]; return { key: "D:" + s.dd, shape: "store", x: x + 87, y: y + 22, w: 175, h: 44, no: s.no, title: s.name, sub: s.dd + (s.crud === "O" ? " · 開閉のみ" : ""), cls: s.crud === "O" ? "unused" : "" }; }),
+  ];
+  const flows = DFD.flows.map(f => ({ key: "F:" + f.id, from: f.from, to: f.to, label: `${f.id} ${f.name}`, cls: f.est ? "est" : "", la: f.labelAnchor, lo: f.labelOffset }));
+  return { width: DFD.width || 1000, height: DFD.height || 500, nodes, flows };
+}
+function itemTable(keys) {
+  if (!keys.length) return "";
+  return `<div class="scroll"><table><thead><tr><th>データ項目</th><th>物理項目</th><th>型</th></tr></thead><tbody>
+    ${keys.map(fk => { const f = FIELDS[fk]; return `<tr><td><button class="chip" data-go="I:${f.item}">${f.item} ${esc(IB[f.item].name)}</button></td><td class="mono">${esc(f.name)}</td><td class="mono">${esc(f.pic)}</td></tr>`; }).join("")}</tbody></table></div>`;
+}
+function dfdDetail(k) {
+  const [t, id] = sp(k);
+  let head = "", body = "";
+  if (t === "P") { const p = PB[id]; head = `<h3>${id} ${esc(p.name.join(""))}</h3><span class="orig">${esc(p.para || "")}</span>`; body = `<p>${esc(p.desc || "")}</p>`; }
+  if (t === "E") { const e = EB[id]; head = `<h3>${id} ${esc(e.name)}</h3><span class="orig">外部</span>`; body = `<p>${esc(e.desc || "")}</p>`; }
+  if (t === "D") { const s = SB[id]; head = `<h3>${s.no} ${esc(s.name)}</h3><span class="orig">${s.dd} · ${esc(s.cb)}</span>`; body = `<p>${s.crud === "O" ? "このバッチでは開いて閉じるだけで、データの流れはありません。" : "このバッチが使うデータストアです（" + esc(useLabel(s)) + "）。"}</p><div><button class="chip" data-go="D:${id}">DB・ファイル一覧で開く</button></div>`; }
+  if (t === "F") {
+    const f = FB[id];
+    head = `<h3>${id} ${esc(f.name)}</h3><span class="orig">${esc(chipLabel(f.from))} → ${esc(chipLabel(f.to))}</span>`;
+    body = (f.note ? `<p>${esc(f.note)}</p>` : "") + (f.items.length ? `<b class="rh">運ぶデータ項目（${f.items.length}）</b>${itemTable(f.items)}` : "") + ((f.lines || []).length ? `<b class="rh">根拠のコード</b>${srcBlock(SRC, f.lines)}` : "");
+  }
+  return `<div class="dhead">${head}</div><div class="dbody">${body}${relHtml(k)}</div>`;
+}
+R.dfd = () => `<div class="viewhead"><h2>DFD</h2><span class="doctag">設計書でいうと：DFD（データフロー図）</span></div>
+  <p class="lead">データがどこから来て、どの処理を通り、どこへ行くかを示します。丸がプロセス、左端に番号を付けた箱がデータストア（DB・ファイル）、四角が外部です。要素や矢印を押すと、運ぶデータ項目と、他の資料とのつながりが右に出ます。ファイルを開く・閉じるなどの制御は、DFDでは扱いません。</p>
+  <div class="flowgrid">
+    <div class="panel"><div class="scroll">${dfdSvg(dfdModel(), state.selBy.dfd)}</div>
+      <div class="legend"><span><i class="term"></i>プロセス</span><span><i style="border-width:1.3px 0;box-shadow:inset 1.3px 0 0 var(--ink)"></i>データストア</span><span><i></i>外部</span><span>破線：推定、または開閉のみ</span></div></div>
+    <aside class="panel detail" id="detail">${dfdDetail(state.selBy.dfd)}</aside>
+  </div>`;
+
+/* DB・ファイル一覧 */
+const useCls = (f) => f.name === "FILLER" ? "u-fill" : { "個別参照": "u-ok", "レコード一括": "u-rec", "定義のみ": "u-none" }[f.use];
+function dbDetail(dd) {
+  const s = SB[dd], fs = s.fields.map(k => FIELDS[k]).sort((a, b) => a.pos[0] - b.pos[0]);
+  const used = fs.filter(f => f.use === "個別参照").length;
+  return `<div class="dhead"><h3>${s.no} ${esc(s.name)}</h3><span class="orig">${s.dd} · ${s.cb === "—" ? "COPY句なし" : "COPY " + esc(s.cb)} · ${esc(s.record || "")}</span></div><div class="dbody">
+    <dl class="dl"><dt>編成・アクセス</dt><dd>${esc(s.org)}・${esc(s.access)}</dd><dt>キー</dt><dd>${esc(s.key)}</dd><dt>レコード長</dt><dd>${s.len}バイト・${fs.length}項目</dd><dt>CRUD</dt><dd>${esc(useLabel(s))}</dd><dt>このバッチで使う項目</dt><dd>${used}項目</dd></dl>
+    ${s.crud === "O" ? `<div class="callout">このバッチでは開いて閉じるだけで、どの項目も使いません。</div>` : ""}
+    <div><b class="rh">レコードレイアウト</b>${layoutBar(fs, s.len, s.name, useCls)}
+      <div class="legend" style="padding:4px 0 0;border:0"><span><i style="background:var(--accent);border-color:var(--accent)"></i>個別に参照</span><span><i style="background:var(--accent-soft);border-color:var(--accent)"></i>レコードごと扱う</span><span><i style="background:var(--line);border-color:var(--line)"></i>使わない</span><span><i style="background:var(--sunken)"></i>予備領域</span></div></div>
+    <div class="scroll"><table><thead><tr><th class="num">位置</th><th>物理項目</th><th>データ項目</th><th>型</th><th>使い方</th></tr></thead><tbody>
+      ${fs.map(f => `<tr><td class="num mono">${f.pos[0]}–${f.pos[1]}</td><td class="mono">${esc(f.name)}</td><td><button class="chip" data-go="I:${f.item}">${f.item}</button></td><td class="mono">${esc(f.pic)}</td><td>${pill(USE_PILL[f.use], f.use)}</td></tr>`).join("")}
+    </tbody></table></div>
+    ${s.ops.length ? `<b class="rh">入出力文</b><div class="scroll"><table><tbody>${s.ops.map(o => `<tr><td class="mono">${o.verb}</td><td class="mono">${o.line}行</td><td class="mono">${esc(o.paragraph || "")}</td></tr>`).join("")}</tbody></table></div>` : ""}
+    ${relHtml("D:" + dd)}
+    <b class="rh">定義のコード（SELECT・FD・COPY）</b>${srcBlock(SRC, s.src)}
+  </div>`;
+}
+R.db = () => {
+  const [, dd] = sp(state.selBy.db);
+  return `<div class="viewhead"><h2>DB・ファイル一覧</h2><span class="doctag">設計書でいうと：DB一覧・ファイル一覧・レコードレイアウト</span></div>
+  <p class="lead">データストアごとの編成・キー・使われ方です。D番号はDFDのデータストアと共通です。行を押すと、レコードレイアウトと、実際に使っている項目が右に出ます。項目と位置はCOPY句から抽出しています。</p>
+  <div class="flowgrid">
+    <div class="panel scroll"><table>
+      <thead><tr><th>D番号</th><th>DD名</th><th>名称</th><th>編成</th><th>キー</th><th class="num">長さ</th><th class="num">項目</th><th class="num">使う</th><th>CRUD</th></tr></thead>
+      <tbody>${STORES.map(s => { const fs = s.fields.map(k => FIELDS[k]); return `<tr data-sel="D:${s.dd}" class="${s.dd === dd ? "selrow" : ""} ${s.crud === "O" ? "io-unused" : ""}"><td class="mono">${s.no}</td><td class="mono">${s.dd}</td><td>${esc(s.name)}</td><td>${esc(s.org)}</td><td>${esc(s.key)}</td><td class="num">${s.len}</td><td class="num">${fs.length}</td><td class="num">${fs.filter(f => f.use === "個別参照").length}</td><td>${pill(s.crud === "O" ? "none" : "ok", useLabel(s))}</td></tr>`; }).join("")}</tbody>
+    </table></div>
+    <aside class="panel detail" id="detail">${dbDetail(dd)}</aside>
+  </div>`;
+};
+
+/* データ項目定義 */
+function itemDetail(iid) {
+  const it = IB[iid], fs = it.fields.map(k => FIELDS[k]);
+  const lines = [...new Set(fs.flatMap(f => f.direct))].sort((a, b) => a - b);
+  const rec = [...new Set(fs.flatMap(f => f.recLines))].sort((a, b) => a - b);
+  let code;
+  if (lines.length) code = `<b class="rh">使用箇所（${lines.length}行）</b>${srcBlock(SRC, mergeLines(lines))}`;
+  else if (rec.length) code = `<p>コードの中では個別に参照されていません。レコード全体の READ INTO・DISPLAY など（${rec.join("・")}行）で一緒に扱われます。</p>`;
+  else code = `<p>このバッチでは使われていません（定義のみ）。</p>`;
+  return `<div class="dhead"><h3>${it.id} ${esc(it.name)}</h3><span class="orig">${[...new Set(fs.map(f => f.name))].join(" · ")}</span></div><div class="dbody">
+    <dl class="dl"><dt>型</dt><dd class="mono">${it.pics.join(" / ")}</dd><dt>格納先</dt><dd>${fs.length}か所</dd><dt>このバッチでの使い方</dt><dd>${pill(USE_PILL[it.use], it.use)}</dd></dl>
+    ${it.pics.length > 1 ? `<div class="callout">格納先によって型が違います。移送時の桁あふれや変換に注意が必要です。</div>` : ""}
+    <div class="scroll"><table><thead><tr><th>格納先</th><th>物理項目</th><th>型</th><th class="num">位置</th><th>使い方</th></tr></thead><tbody>
+      ${fs.map(f => `<tr><td><button class="chip" data-go="D:${f.store}">${SB[f.store].no} ${esc(SB[f.store].name)}</button></td><td class="mono">${esc(f.name)}</td><td class="mono">${esc(f.pic)}</td><td class="num mono">${f.pos[0]}–${f.pos[1]}</td><td>${pill(USE_PILL[f.use], f.use)}</td></tr>`).join("")}
+    </tbody></table></div>
+    ${relHtml("I:" + iid)}
+    ${code}
+  </div>`;
+}
+R.items = () => {
+  const [, iid] = sp(state.selBy.items), f = state.itemFilter;
+  const cnt = { all: LOG.length, use: LOG.filter(i => i.use !== "定義のみ").length, key: LOG.filter(i => i.isKey).length };
+  return `<div class="viewhead"><h2>データ項目定義</h2><span class="doctag">設計書でいうと：データ項目定義書（項目辞書）</span></div>
+  <p class="lead">同じ意味の項目を1つのデータ項目（DI）にまとめ、どのファイルのどの項目に格納されているかをつなげています。名前の対応はデータ辞書（dictionary.json）で決めています。行を押すと、格納先、運ぶデータフロー、使用箇所が右に出ます。</p>
+  <div class="flowgrid">
+    <div class="panel">
+      <div class="toolbar filters">
+        ${[["all", "全項目"], ["use", "このバッチで使う"], ["key", "キー項目"]].map(([v, l]) => `<button class="btn" data-filter="${v}" aria-pressed="${f === v}">${l} ${cnt[v]}</button>`).join("")}
+        <input id="q" type="search" placeholder="項目名で絞り込む" aria-label="項目名で絞り込む">
+      </div>
+      <div class="scroll"><table>
+        <thead><tr><th>ID</th><th>データ項目</th><th>型</th><th>格納先</th><th>使い方</th></tr></thead>
+        <tbody>${LOG.map(it => `<tr data-sel="I:${it.id}" data-q="${esc((it.name + " " + it.fields.map(k => FIELDS[k].name).join(" ")).toLowerCase())}" data-use="${it.use}" data-key="${it.isKey}" class="${it.id === iid ? "selrow" : ""}"><td class="mono">${it.id}</td><td>${esc(it.name)}${it.isKey ? " " + pill("ok", "キー") : ""}</td><td class="mono">${it.pics.join(" / ")}</td><td class="mono">${[...new Set(it.fields.map(k => SB[FIELDS[k].store].no))].join(" ")}</td><td>${pill(USE_PILL[it.use], it.use)}</td></tr>`).join("")}</tbody>
+      </table></div>
+    </div>
+    <aside class="panel detail" id="detail">${itemDetail(iid)}</aside>
+  </div>`;
+};
+function applyItemFilter() {
+  const q = ($("#q")?.value || "").trim().toLowerCase(), f = state.itemFilter;
+  document.querySelectorAll("#main tr[data-q]").forEach(tr => {
+    const okF = f === "all" || (f === "use" && tr.dataset.use !== "定義のみ") || (f === "key" && tr.dataset.key === "true");
+    tr.hidden = !(okF && (!q || tr.dataset.q.includes(q)));
+  });
+}
+
+R.flow = () => `<div class="viewhead"><h2>処理フロー</h2><span class="doctag">設計書でいうと：処理フロー（流れ図）・処理詳細</span></div>
+  <p class="lead">正常系を縦一列に、例外を右（エラー）と左（EOFなど）に分けています。二重線の箱は別段落の呼出し、灰色の箱は同じ形の定型処理をまとめたものです。図の箱を押すと、右に根拠のコードが出ます。</p>
+  <div class="flowgrid">
+    <div class="panel">
+      <div class="toolbar"><label><input type="checkbox" id="showErr" ${state.showErr ? "checked" : ""}> 例外の経路も表示</label></div>
+      <div class="scroll" id="flowbox">${flowSvg()}</div>
+      <div class="legend"><span><i class="term"></i>端子</span><span><i></i>処理</span><span><i class="pre"></i>段落の呼出し</span><span><i class="dec"></i>判断</span><span><i class="warn"></i>EOFなど</span><span><i class="err"></i>エラー・未登録</span></div>
+    </div>
+    <aside class="panel detail" id="detail">${detailHtml(state.sel)}</aside>
+  </div>`;
+
+R.errors = () => `<div class="viewhead"><h2>例外と異常系</h2><span class="doctag">設計書でいうと：エラー処理一覧・メッセージ一覧</span></div>
+  <p class="lead">正常に進まないときの行き先を一覧にしました。行を押すと、処理フローの該当箇所を開きます。</p>
+  <div class="panel scroll"><table>
+    <thead><tr><th>事象</th><th>検知する段落</th><th>判定条件</th><th>出力</th><th>その後</th></tr></thead>
+    <tbody>${V.errors.map(r => `<tr data-node="${r.node}" style="cursor:pointer"><td>${pill(r.level, r.event)}</td><td class="mono">${esc(r.where)}</td><td>${esc(r.cond)}</td><td class="mono">${esc(r.output)}</td><td>${esc(r.after)}</td></tr>`).join("")}</tbody>
+  </table></div>`;
+
+R.trace = () => {
+  const pt = PATTERNS[state.pattern];
+  return `<div class="viewhead"><h2>処理パターン</h2><span class="doctag">設計書でいうと：テストケース・処理シナリオ</span></div>
+  <p class="lead">入力を選んで、1ステップずつ図をたどります。作業領域の値と出力ログが、ステップごとにどう変わるかを確認できます。ソースとサンプルから再構成した処理順で、実機での実行結果ではありません。</p>
+  <div class="flowgrid">
+    <div class="panel"><div class="scroll" id="flowbox">${flowSvg()}</div></div>
+    <aside class="panel detail"><div class="dbody trace">
+      <div class="tctl"><select id="pat" aria-label="入力パターン">${Object.entries(PATTERNS).map(([k, v]) => `<option value="${k}" ${k === state.pattern ? "selected" : ""}>${esc(v.name)}</option>`).join("")}</select></div>
+      <p style="font-size:12.5px;color:var(--muted)">${esc(pt.note)}</p>
+      <div class="tctl"><button class="btn" id="prev">前へ</button><button class="btn primary" id="next">次へ</button><button class="btn" id="reset">最初から</button><span class="mono" id="cnt"></span></div>
+      <div class="stepinfo" id="sinfo"></div>
+      <dl class="ws" id="ws"></dl>
+      <div><b style="font-size:12px;color:var(--muted)">出力ログ</b><div class="log" id="log"></div></div>
+    </div></aside>
+  </div>`;
+};
+function paintTrace() {
+  const steps = PATTERNS[state.pattern].steps, st = steps[state.step];
+  $("#cnt").textContent = `${state.step + 1} / ${steps.length}`;
+  $("#prev").disabled = state.step === 0;
+  $("#next").disabled = state.step === steps.length - 1;
+  $("#sinfo").innerHTML = `<b>${esc(NB[st.node].label)}</b>：${esc(st.info)}${st.flag ? " " + pill(st.flag, st.flag === "warn" ? "要注意" : "異常") : ""}`;
+  const ws = {}, changed = new Set(Object.keys(st.ws || {}));
+  for (let i = 0; i <= state.step; i++) Object.assign(ws, steps[i].ws || {});
+  const lab = V.workArea;
+  $("#ws").innerHTML = Object.keys(lab).map(k => `<dt>${esc(lab[k])}</dt><dd class="${changed.has(k) ? "chg" : ""}">${ws[k] !== undefined ? esc(/^ +$/.test(ws[k]) ? `（空白${ws[k].length}桁）` : ws[k]) : "—"}</dd>`).join("");
+  let html = "";
+  const seen = new Set();
+  steps.slice(0, state.step + 1).forEach((s, i) => (s.log || []).forEach(line => {
+    const dup = seen.has(line) && !/^(SUCCESSFUL|CARD NUMBER:|ACCOUNT ID :|CUSTOMER ID:)/.test(line);
+    seen.add(line);
+    html += `<div class="${i === state.step ? "new" : ""} ${dup ? "dup" : ""}">${esc(line)}${dup ? "  ← 2回目" : ""}</div>`;
+  }));
+  const log = $("#log");
+  log.innerHTML = html || `<span style="color:var(--muted)">まだ出力はありません</span>`;
+  log.scrollTop = log.scrollHeight;
+  paintFlow($("#flowbox"));
+}
+
+R.coverage = () => {
+  const N = SRC.length, procStart = V.procedureLine;
+  const flowLines = new Set();
+  NODES.forEach(n => n.lines.forEach(([a, b]) => { for (let i = a; i <= b; i++) flowLines.add(i); }));
+  let cells = "", exec = 0, hit = 0, def = 0, cm = 0;
+  for (let i = 1; i <= N; i++) {
+    const t = SRC[i - 1] || "", blank = !t.slice(6, 72).trim(), c = isComment(t);
+    let cls;
+    if (blank || c) { cls = "c-cm"; cm++; }
+    else if (i <= procStart) { cls = "c-def"; def++; }
+    else { exec++; if (flowLines.has(i)) { cls = "c-flow"; hit++; } else cls = "c-gap"; }
+    cells += `<span class="${cls}" data-line="${i}" title="${i}行"></span>`;
+  }
+  const paras = V.paragraphs, inFlow = (p) => [p.start, p.start + 1].some(i => flowLines.has(i));
+  const pHit = paras.filter(inFlow).length;
+  return `<div class="viewhead"><h2>網羅と未確認</h2><span class="doctag">設計書でいうと：レビュー記録・課題一覧</span></div>
+  <p class="lead">図に載っていない実行行が残っていないかを、原本の全行で確かめます。色の帯は1行目から${N}行目までを順に並べたもので、押すとその行のコードを表示します。図に載ったことは、意味まで確認できたことを意味しません。</p>
+  <div class="cov">
+    <div class="panel"><small>実行行のうち図に対応</small><b>${hit} / ${exec}</b><div class="bar"><i style="width:${Math.round(hit / exec * 100)}%"></i></div></div>
+    <div class="panel"><small>段落のうち図に対応</small><b>${pHit} / ${paras.length}</b><div class="bar"><i style="width:${Math.round(pHit / paras.length * 100)}%"></i></div></div>
+    <div class="panel"><small>定義・宣言の行</small><b>${def}</b><small>図の対象外（DB・ファイル一覧、データ項目定義で扱う）</small></div>
+    <div class="panel"><small>コメント・空行</small><b>${cm}</b><small>図の対象外</small></div>
+  </div>
+  <div class="panel"><div class="strip" id="strip">${cells}</div>
+    <div class="legend"><span><i style="background:var(--accent);border-color:var(--accent)"></i>図に対応</span><span><i style="background:var(--err);border-color:var(--err)"></i>実行行で図に無い</span><span><i style="background:var(--line);border-color:var(--line)"></i>定義</span><span><i style="background:var(--sunken)"></i>コメント・空行</span></div>
+  </div>
+  <div class="section-gap"></div>
+  <div class="flowgrid">
+    <div class="panel"><div class="dbody"><b>段落</b><div class="paras" style="padding:0">${paras.map(p => `<span class="pill ${inFlow(p) ? "ok" : "err"}" data-line="${p.start}" style="cursor:pointer">${esc(p.name)}</span>`).join("")}</div>
+      <b>未確認事項</b>
+      <ol class="open-items">${V.openItems.map(x => `<li>${esc(x)}</li>`).join("")}</ol>
+      <p class="ev" style="color:var(--muted);font-size:12px">原本：${esc(V.meta.source)}（SHA-256 ${V.meta.sha256.slice(0, 12)}…）</p></div></div>
+    <aside class="panel detail" id="covsrc"><div class="dbody"><p style="color:var(--muted)">帯か段落を押すと、その周辺のコードを表示します。</p></div></aside>
+  </div>`;
+};
+
+/* ---------- 画面ごとの操作 ---------- */
+function bindJumps() {
+  document.querySelectorAll("[data-jump]").forEach(b => b.addEventListener("click", () => {
+    const pre = $("#detail pre.src");
+    const line = pre && [...pre.querySelectorAll(".no")].find(x => x.textContent === b.dataset.jump);
+    if (line) line.parentElement.scrollIntoView({ block: "center", behavior: "smooth" });
+  }));
+}
+function afterRender() {
+  const fb = $("#flowbox");
+  if (state.view === "flow") {
+    paintFlow(fb);
+    bindFlow(fb, id => { state.sel = id; $("#detail").innerHTML = detailHtml(id); paintFlow(fb); bindJumps(); if (innerWidth <= 1100) $("#detail").scrollIntoView({ block: "start", behavior: "smooth" }); });
+    $("#showErr").addEventListener("change", e => { state.showErr = e.target.checked; paintFlow(fb); });
+    bindJumps();
+  }
+  if (state.view === "trace") {
+    bindFlow(fb, () => {});
+    const go = (d) => { const n = PATTERNS[state.pattern].steps.length; state.step = Math.max(0, Math.min(n - 1, state.step + d)); paintTrace(); };
+    $("#prev").onclick = () => go(-1);
+    $("#next").onclick = () => go(1);
+    $("#reset").onclick = () => { state.step = 0; paintTrace(); };
+    $("#pat").onchange = (e) => { state.pattern = e.target.value; state.step = 0; render(); };
+    paintTrace();
+  }
+  if (state.view === "errors") document.querySelectorAll("[data-node]").forEach(tr => tr.addEventListener("click", () => { state.sel = tr.dataset.node; show("flow"); }));
+  if (state.view === "dfd") document.querySelectorAll("#main svg [data-k]").forEach(g => g.addEventListener("click", () => { state.selBy.dfd = g.dataset.k; render(); }));
+  if (state.view === "db" || state.view === "items") {
+    document.querySelectorAll("#main tr[data-sel]").forEach(tr => tr.addEventListener("click", (e) => { if (e.target.closest("[data-go]")) return; state.selBy[state.view] = tr.dataset.sel; render(); }));
+  }
+  if (state.view === "items") {
+    document.querySelectorAll("[data-filter]").forEach(b => b.addEventListener("click", () => { state.itemFilter = b.dataset.filter; document.querySelectorAll("[data-filter]").forEach(x => x.setAttribute("aria-pressed", x === b)); applyItemFilter(); }));
+    $("#q").addEventListener("input", applyItemFilter);
+    applyItemFilter();
+  }
+  if (state.view === "coverage") {
+    document.querySelectorAll("#main [data-line]").forEach(el => el.addEventListener("click", () => {
+      const i = +el.dataset.line, a = Math.max(1, i - 6), b = Math.min(SRC.length, i + 10);
+      $("#covsrc").innerHTML = `<div class="dhead"><h3>${i}行目の周辺</h3></div><div class="dbody">${srcBlock(SRC, [[a, b]], [[i, i]])}</div>`;
+    }));
+  }
+}
+
+$("#h-title").textContent = V.meta.title;
+$("#h-pg").textContent = `${V.meta.program} · ${V.meta.type} · ${V.meta.lines}行`;
+if (V.links.job) $("#h-link").outerHTML = `<a class="uplink" href="${esc(V.links.job.href)}">${esc(V.links.job.label)} →</a>`;
+else $("#h-link").remove();
+startApp();
+</script>
+
+</body>
+</html>
