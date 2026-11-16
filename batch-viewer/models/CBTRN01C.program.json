@@ -1,0 +1,1551 @@
+{
+ "$schema": "batch-design-viewer/program-model@1",
+ "program": "CBTRN01C",
+ "title": "日次取引のカード・口座照合",
+ "type": "BATCH COBOL",
+ "source": "../../original/CBTRN01C.cbl",
+ "copybooks": [
+  "../../sources/carddemo/cpy"
+ ],
+ "dictionary": "../dictionary.json",
+ "links": {
+  "job": {
+   "href": "daily-job.html",
+   "label": "ジョブ全体を見る"
+  }
+ },
+ "overview": {
+  "summary": [
+   [
+    "目的",
+    "日次取引のカード番号と口座の存在を確認する"
+   ],
+   [
+    "処理単位",
+    "日次取引1件ごと"
+   ],
+   [
+    "入力",
+    "6ファイル（実際に読むのは3つ）"
+   ],
+   [
+    "出力",
+    "標準出力のみ。ファイル更新なし"
+   ],
+   [
+    "異常時",
+    "ABEND 999"
+   ]
+  ],
+  "checks": [
+   {
+    "title": "起動条件・タイミング",
+    "status": "none",
+    "label": "未確認",
+    "text": "日次で動く前提だが、起動時刻・前後のジョブ・カレンダーはJCLやジョブ定義が無いため分からない。",
+    "evidence": "JCL未入手"
+   },
+   {
+    "title": "入力",
+    "status": "ok",
+    "label": "根拠あり",
+    "text": "日次取引を先頭から順に読み、カード索引と口座マスターをキーで引く。顧客・カード・取引の3ファイルは開くだけで読まない。",
+    "evidence": "29〜63行, 157〜162行"
+   },
+   {
+    "title": "処理内容",
+    "status": "ok",
+    "label": "根拠あり",
+    "text": "カード番号 → 口座ID → 口座マスターの順に存在を確認する。金額の計算や更新はしない。",
+    "evidence": "164〜186行"
+   },
+   {
+    "title": "出力",
+    "status": "warn",
+    "label": "要確認",
+    "text": "結果は DISPLAY で標準出力に出るだけ。照合結果を後続処理が使うのか、誰が見るのかは不明。",
+    "evidence": "168, 178, 181行"
+   },
+   {
+    "title": "異常時の動作",
+    "status": "ok",
+    "label": "根拠あり",
+    "text": "OPEN・読込・CLOSEの失敗でアベンド999。カード・口座の未登録はメッセージを出して続行する。",
+    "evidence": "例外と異常系を参照"
+   },
+   {
+    "title": "再実行",
+    "status": "warn",
+    "label": "推定",
+    "text": "ファイルを更新しないので、同じ入力で再実行しても副作用はないと考えられる。運用上の手順は未確認。",
+    "evidence": "更新文なし"
+   },
+   {
+    "title": "件数・処理時間",
+    "status": "none",
+    "label": "未確認",
+    "text": "処理件数の集計や出力は無い。想定件数・処理時間の要件は資料が無い。",
+    "evidence": "—"
+   },
+   {
+    "title": "読み違えやすい点",
+    "status": "warn",
+    "label": "要確認",
+    "text": "EOFのとき最後の1件をもう一度照合する。空入力でも照合が1回走る。",
+    "evidence": "166〜185行"
+   }
+  ]
+ },
+ "context": {
+  "prev": {
+   "label": "前のジョブ",
+   "sub": "JCL未入手"
+  },
+  "next": {
+   "label": "次のジョブ",
+   "sub": "JCL未入手"
+  },
+  "outputs": [
+   {
+    "name": "標準出力（SYSOUT）",
+    "sub": "照合結果・エラー"
+   }
+  ],
+  "note": "顧客・カード・取引の3ファイルは、開いて閉じるだけで一度も読みません。後の改修で使わなくなった名残か、別の理由があるのかは未確認です。移行時にこの3ファイルを残すかどうかの判断材料になります。"
+ },
+ "stores": [
+  {
+   "dd": "DALYTRAN",
+   "no": "D1",
+   "name": "日次取引",
+   "nodes": [
+    "open",
+    "read",
+    "rres",
+    "eof",
+    "close"
+   ]
+  },
+  {
+   "dd": "XREFFILE",
+   "no": "D2",
+   "name": "カード索引",
+   "nodes": [
+    "open",
+    "xref",
+    "xres",
+    "close"
+   ]
+  },
+  {
+   "dd": "ACCTFILE",
+   "no": "D3",
+   "name": "口座マスター",
+   "nodes": [
+    "open",
+    "acct",
+    "ares",
+    "close"
+   ]
+  },
+  {
+   "dd": "CUSTFILE",
+   "no": "D4",
+   "name": "顧客マスター",
+   "nodes": [
+    "open",
+    "close"
+   ],
+   "layoutRecord": "CUSTOMER-RECORD"
+  },
+  {
+   "dd": "CARDFILE",
+   "no": "D5",
+   "name": "カードマスター",
+   "nodes": [
+    "open",
+    "close"
+   ],
+   "layoutRecord": "CARD-RECORD"
+  },
+  {
+   "dd": "TRANFILE",
+   "no": "D6",
+   "name": "取引マスター",
+   "nodes": [
+    "open",
+    "close"
+   ],
+   "layoutRecord": "TRAN-RECORD"
+  }
+ ],
+ "flow": {
+  "nodes": [
+   {
+    "id": "start",
+    "type": "term",
+    "label": "開始",
+    "sub": "START OF EXECUTION を表示",
+    "lines": [
+     [
+      155,
+      156
+     ]
+    ],
+    "orig": "MAIN-PARA",
+    "desc": "開始メッセージを標準出力に出します。",
+    "lane": "main",
+    "row": 0
+   },
+   {
+    "id": "open",
+    "type": "pre",
+    "label": "6ファイルを入力用に開く",
+    "sub": "定型 ×6 · 0000〜0500",
+    "lines": [
+     [
+      157,
+      162
+     ],
+     [
+      252,
+      360
+     ]
+    ],
+    "orig": "0000-DALYTRAN-OPEN 〜 0500-TRANFILE-OPEN",
+    "desc": "日次取引・顧客・カード索引・カード・口座・取引の6ファイルを、この順に OPEN INPUT します。6段落とも同じ形で、違うのはファイル名と表示するメッセージだけです。1つでも失敗すると異常終了します。",
+    "lane": "main",
+    "row": 1,
+    "routine": "open"
+   },
+   {
+    "id": "read",
+    "type": "pre",
+    "label": "日次取引を1件読む",
+    "sub": "1000-DALYTRAN-GET-NEXT",
+    "lines": [
+     [
+      166,
+      166
+     ],
+     [
+      202,
+      212
+     ]
+    ],
+    "orig": "1000-DALYTRAN-GET-NEXT",
+    "desc": "日次取引ファイルを先頭から順に1件読み、作業領域 DALYTRAN-RECORD に移します（READ … INTO）。",
+    "lane": "main",
+    "row": 2
+   },
+   {
+    "id": "rres",
+    "type": "dec",
+    "label": "読込の結果は",
+    "lines": [
+     [
+      205,
+      226
+     ]
+    ],
+    "orig": "DALYTRAN-STATUS / APPL-RESULT",
+    "desc": "ファイル状態 '00' は正常、'10' はEOF、それ以外は読込エラーです。",
+    "lane": "main",
+    "row": 3
+   },
+   {
+    "id": "disp",
+    "type": "proc",
+    "label": "取引レコードを表示",
+    "sub": "EOFでないときだけ",
+    "lines": [
+     [
+      167,
+      169
+     ]
+    ],
+    "orig": "DISPLAY DALYTRAN-RECORD",
+    "desc": "読んだ取引レコード全体を表示します。EOFのときは表示しません。",
+    "lane": "main",
+    "row": 4
+   },
+   {
+    "id": "xref",
+    "type": "pre",
+    "label": "カード番号で索引を引く",
+    "sub": "2000-LOOKUP-XREF",
+    "lines": [
+     [
+      170,
+      172
+     ],
+     [
+      227,
+      229
+     ]
+    ],
+    "orig": "2000-LOOKUP-XREF",
+    "desc": "取引のカード番号をキーに、カード索引（XREF）をランダム読込します。見つかれば口座IDと顧客IDが分かります。",
+    "lane": "main",
+    "row": 5
+   },
+   {
+    "id": "xres",
+    "type": "dec",
+    "label": "索引にカードがあるか",
+    "lines": [
+     [
+      173,
+      173
+     ],
+     [
+      230,
+      240
+     ]
+    ],
+    "orig": "INVALID KEY / WS-XREF-READ-STATUS",
+    "desc": "INVALID KEY なら未登録です。見つかった場合はカード番号・口座ID・顧客IDを表示します。",
+    "lane": "main",
+    "row": 6
+   },
+   {
+    "id": "acct",
+    "type": "pre",
+    "label": "口座IDで口座マスターを引く",
+    "sub": "3000-READ-ACCOUNT",
+    "lines": [
+     [
+      174,
+      176
+     ],
+     [
+      241,
+      243
+     ]
+    ],
+    "orig": "3000-READ-ACCOUNT",
+    "desc": "索引で得た口座IDをキーに、口座マスター（ACCTFILE）をランダム読込します。",
+    "lane": "main",
+    "row": 7
+   },
+   {
+    "id": "ares",
+    "type": "dec",
+    "label": "口座があるか",
+    "lines": [
+     [
+      177,
+      177
+     ],
+     [
+      244,
+      251
+     ]
+    ],
+    "orig": "INVALID KEY / WS-ACCT-READ-STATUS",
+    "desc": "見つかれば SUCCESSFUL READ OF ACCOUNT FILE を表示して照合成功です。照合結果をファイルに書くことはありません。",
+    "lane": "main",
+    "row": 8
+   },
+   {
+    "id": "loop",
+    "type": "dec",
+    "label": "EOFに達したか",
+    "lines": [
+     [
+      164,
+      165
+     ],
+     [
+      185,
+      186
+     ]
+    ],
+    "orig": "PERFORM UNTIL END-OF-DAILY-TRANS-FILE = 'Y'",
+    "desc": "EOFフラグが 'Y' になるまで、1件ずつの処理を繰り返します。",
+    "lane": "main",
+    "row": 9
+   },
+   {
+    "id": "close",
+    "type": "pre",
+    "label": "6ファイルを閉じる",
+    "sub": "定型 ×6 · 9000〜9500",
+    "lines": [
+     [
+      187,
+      193
+     ],
+     [
+      361,
+      468
+     ]
+    ],
+    "orig": "9000-DALYTRAN-CLOSE 〜 9500-TRANFILE-CLOSE",
+    "desc": "開いたときと同じ順に6ファイルを閉じます。6段落とも同じ形です。ただし日次取引を閉じる段落だけ、表示内容が他と食い違っています（下の表）。",
+    "lane": "main",
+    "row": 10,
+    "routine": "close"
+   },
+   {
+    "id": "end",
+    "type": "term",
+    "label": "終了",
+    "sub": "END OF EXECUTION · GOBACK",
+    "lines": [
+     [
+      194,
+      196
+     ]
+    ],
+    "orig": "GOBACK",
+    "desc": "終了メッセージを出して呼出し元へ戻ります。",
+    "lane": "main",
+    "row": 11
+   },
+   {
+    "id": "eof",
+    "type": "proc",
+    "label": "EOFを記録",
+    "sub": "作業領域は直前の取引",
+    "lines": [
+     [
+      207,
+      209
+     ],
+     [
+      216,
+      217
+     ]
+    ],
+    "orig": "MOVE 'Y' TO END-OF-DAILY-TRANS-FILE",
+    "desc": "EOFフラグを 'Y' にします。READ … INTO はEOFでは作業領域を書き換えないので、直前に読んだ取引が残ったままです。このまま索引の照合へ進みます。",
+    "lane": "left",
+    "row": 4,
+    "kind": "warn"
+   },
+   {
+    "id": "abend",
+    "type": "term",
+    "label": "異常終了",
+    "sub": "ABEND 999",
+    "lines": [
+     [
+      218,
+      222
+     ],
+     [
+      469,
+      488
+     ]
+    ],
+    "orig": "Z-DISPLAY-IO-STATUS → Z-ABEND-PROGRAM",
+    "desc": "エラーメッセージとファイル状態を表示し、CEE3ABD でアベンドコード999の異常終了をします。ファイルは閉じません。",
+    "lane": "right",
+    "row": 3,
+    "kind": "err"
+   },
+   {
+    "id": "skip",
+    "type": "proc",
+    "label": "カード未登録",
+    "sub": "表示して次の取引へ",
+    "lines": [
+     [
+      180,
+      184
+     ],
+     [
+      232,
+      233
+     ]
+    ],
+    "orig": "COULD NOT BE VERIFIED",
+    "desc": "カード番号と取引IDを表示し、その取引の口座照合は行いません。件数の集計や別ファイルへの出力はありません。",
+    "lane": "right",
+    "row": 6,
+    "kind": "err"
+   },
+   {
+    "id": "noacct",
+    "type": "proc",
+    "label": "口座未登録",
+    "sub": "ACCOUNT … NOT FOUND",
+    "lines": [
+     [
+      178,
+      179
+     ],
+     [
+      246,
+      247
+     ]
+    ],
+    "orig": "INVALID ACCOUNT NUMBER FOUND",
+    "desc": "口座IDを表示して次の取引へ進みます。",
+    "lane": "right",
+    "row": 8,
+    "kind": "err"
+   }
+  ],
+  "edges": [
+   {
+    "from": "start",
+    "to": "open"
+   },
+   {
+    "from": "open",
+    "to": "read"
+   },
+   {
+    "from": "read",
+    "to": "rres"
+   },
+   {
+    "from": "rres",
+    "to": "disp",
+    "label": "正常 00"
+   },
+   {
+    "from": "rres",
+    "to": "eof",
+    "label": "EOF 10",
+    "kind": "warn"
+   },
+   {
+    "from": "rres",
+    "to": "abend",
+    "label": "それ以外",
+    "kind": "err"
+   },
+   {
+    "from": "disp",
+    "to": "xref"
+   },
+   {
+    "from": "eof",
+    "to": "xref",
+    "kind": "warn"
+   },
+   {
+    "from": "xref",
+    "to": "xres"
+   },
+   {
+    "from": "xres",
+    "to": "acct",
+    "label": "あり"
+   },
+   {
+    "from": "xres",
+    "to": "skip",
+    "label": "なし",
+    "kind": "err"
+   },
+   {
+    "from": "acct",
+    "to": "ares"
+   },
+   {
+    "from": "ares",
+    "to": "loop",
+    "label": "あり"
+   },
+   {
+    "from": "ares",
+    "to": "noacct",
+    "label": "なし",
+    "kind": "err"
+   },
+   {
+    "from": "skip",
+    "to": "loop",
+    "kind": "err"
+   },
+   {
+    "from": "noacct",
+    "to": "loop",
+    "kind": "err"
+   },
+   {
+    "from": "loop",
+    "to": "close",
+    "label": "はい"
+   },
+   {
+    "from": "loop",
+    "to": "read",
+    "label": "いいえ（次の1件）"
+   },
+   {
+    "from": "close",
+    "to": "end"
+   },
+   {
+    "from": "open",
+    "to": "abend",
+    "label": "OPEN失敗",
+    "kind": "err",
+    "dash": true
+   },
+   {
+    "from": "close",
+    "to": "abend",
+    "label": "CLOSE失敗",
+    "kind": "err",
+    "dash": true
+   }
+  ],
+  "notes": [
+   {
+    "lane": "left",
+    "row": 6,
+    "title": "読み違えやすい点",
+    "lines": [
+     "EOFでも作業領域には",
+     "直前の取引が残るため、",
+     "最後の1件をもう一度",
+     "照合してから終わる。"
+    ]
+   }
+  ],
+  "routines": {
+   "open": {
+    "columns": [
+     "段落",
+     "ファイル",
+     "表示する状態",
+     "失敗時のメッセージ"
+    ],
+    "rows": [
+     [
+      "0000-DALYTRAN-OPEN",
+      "日次取引",
+      "DALYTRAN-STATUS",
+      "ERROR OPENING DAILY TRANSACTION FILE"
+     ],
+     [
+      "0100-CUSTFILE-OPEN",
+      "顧客",
+      "CUSTFILE-STATUS",
+      "ERROR OPENING CUSTOMER FILE"
+     ],
+     [
+      "0200-XREFFILE-OPEN",
+      "カード索引",
+      "XREFFILE-STATUS",
+      "ERROR OPENING CROSS REF FILE"
+     ],
+     [
+      "0300-CARDFILE-OPEN",
+      "カード",
+      "CARDFILE-STATUS",
+      "ERROR OPENING CARD FILE"
+     ],
+     [
+      "0400-ACCTFILE-OPEN",
+      "口座",
+      "ACCTFILE-STATUS",
+      "ERROR OPENING ACCOUNT FILE"
+     ],
+     [
+      "0500-TRANFILE-OPEN",
+      "取引",
+      "TRANFILE-STATUS",
+      "ERROR OPENING TRANSACTION FILE"
+     ]
+    ],
+    "diffRows": [],
+    "sample": [
+     252,
+     269
+    ]
+   },
+   "close": {
+    "columns": [
+     "段落",
+     "ファイル",
+     "表示する状態",
+     "失敗時のメッセージ"
+    ],
+    "rows": [
+     [
+      "9000-DALYTRAN-CLOSE",
+      "日次取引",
+      "CUSTFILE-STATUS",
+      "ERROR CLOSING CUSTOMER FILE"
+     ],
+     [
+      "9100-CUSTFILE-CLOSE",
+      "顧客",
+      "CUSTFILE-STATUS",
+      "ERROR CLOSING CUSTOMER FILE"
+     ],
+     [
+      "9200-XREFFILE-CLOSE",
+      "カード索引",
+      "XREFFILE-STATUS",
+      "ERROR CLOSING CROSS REF FILE"
+     ],
+     [
+      "9300-CARDFILE-CLOSE",
+      "カード",
+      "CARDFILE-STATUS",
+      "ERROR CLOSING CARD FILE"
+     ],
+     [
+      "9400-ACCTFILE-CLOSE",
+      "口座",
+      "ACCTFILE-STATUS",
+      "ERROR CLOSING ACCOUNT FILE"
+     ],
+     [
+      "9500-TRANFILE-CLOSE",
+      "取引",
+      "TRANFILE-STATUS",
+      "ERROR CLOSING TRANSACTION FILE"
+     ]
+    ],
+    "diffRows": [
+     0
+    ],
+    "sample": [
+     361,
+     378
+    ],
+    "highlight": [
+     [
+      372,
+      373
+     ]
+    ],
+    "note": "9000-DALYTRAN-CLOSE は日次取引を閉じる段落なのに、失敗時に「CUSTOMER FILE」と表示し、顧客ファイルの状態を出します（372〜373行）。原本の誤りか意図かは未確認です。"
+   }
+  }
+ },
+ "dfd": {
+  "externals": [
+   {
+    "id": "E1",
+    "name": "前工程",
+    "sub": "日次取引を作成",
+    "x": 10,
+    "y": 40,
+    "w": 170,
+    "h": 52,
+    "desc": "日次取引ファイルを作るジョブや業務です。JCLが無いため、どのジョブかは未確認です。"
+   },
+   {
+    "id": "E2",
+    "name": "運用担当",
+    "sub": "ジョブログを確認",
+    "x": 800,
+    "y": 375,
+    "w": 170,
+    "h": 52,
+    "desc": "標準出力（SYSOUT）に出た照合結果を見る人です。誰が・いつ見るかは未確認です。"
+   }
+  ],
+  "processes": [
+   {
+    "id": "P1",
+    "name": [
+     "日次取引を",
+     "読む"
+    ],
+    "x": 320,
+    "y": 200,
+    "nodes": [
+     "read",
+     "rres",
+     "eof"
+    ],
+    "para": "1000-DALYTRAN-GET-NEXT",
+    "desc": "日次取引を先頭から1件ずつ読み、取引レコードとして後続へ渡します。"
+   },
+   {
+    "id": "P2",
+    "name": [
+     "カードを",
+     "照合する"
+    ],
+    "x": 520,
+    "y": 200,
+    "nodes": [
+     "xref",
+     "xres",
+     "skip"
+    ],
+    "para": "2000-LOOKUP-XREF",
+    "desc": "取引のカード番号でカード索引を引き、口座IDと顧客IDを得ます。見つからなければその取引を飛ばします。"
+   },
+   {
+    "id": "P3",
+    "name": [
+     "口座を",
+     "照合する"
+    ],
+    "x": 740,
+    "y": 200,
+    "nodes": [
+     "acct",
+     "ares",
+     "noacct"
+    ],
+    "para": "3000-READ-ACCOUNT",
+    "desc": "索引で得た口座IDで口座マスターを引き、口座があるかを確認します。"
+   },
+   {
+    "id": "P4",
+    "name": [
+     "照合結果を",
+     "出力する"
+    ],
+    "x": 520,
+    "y": 400,
+    "nodes": [
+     "disp",
+     "skip",
+     "noacct"
+    ],
+    "para": "MAIN-PARA・2000・3000 の DISPLAY",
+    "desc": "取引レコード、索引の内容、未登録のメッセージを標準出力に出します。原本では独立した段落ではなく、各所の DISPLAY 文に分かれています。"
+   }
+  ],
+  "stores": {
+   "DALYTRAN": [
+    10,
+    178
+   ],
+   "XREFFILE": [
+    430,
+    40
+   ],
+   "ACCTFILE": [
+    650,
+    40
+   ],
+   "CUSTFILE": [
+    10,
+    330
+   ],
+   "CARDFILE": [
+    10,
+    388
+   ],
+   "TRANFILE": [
+    10,
+    446
+   ]
+  },
+  "flows": [
+   {
+    "id": "F0",
+    "from": "E:E1",
+    "to": "D:DALYTRAN",
+    "name": "日次取引",
+    "items": [
+     "DALYTRAN.*"
+    ],
+    "lines": [],
+    "est": true,
+    "note": "前工程が日次取引ファイルを作ると推定しています（JCL未入手）。",
+    "labelAnchor": "start",
+    "labelOffset": [
+     8,
+     4
+    ]
+   },
+   {
+    "id": "F1",
+    "from": "D:DALYTRAN",
+    "to": "P:P1",
+    "name": "日次取引レコード",
+    "items": [
+     "DALYTRAN.*"
+    ],
+    "lines": [
+     [
+      203,
+      203
+     ]
+    ],
+    "note": "READ … INTO でレコード全体を作業領域へ移します。",
+    "labelOffset": [
+     -22,
+     42
+    ]
+   },
+   {
+    "id": "F2",
+    "from": "P:P1",
+    "to": "P:P2",
+    "name": "カード番号",
+    "items": [
+     "DALYTRAN.DALYTRAN-CARD-NUM"
+    ],
+    "lines": [
+     [
+      171,
+      171
+     ]
+    ],
+    "note": "DALYTRAN-CARD-NUM を XREF-CARD-NUM へ移して、索引のキーにします。",
+    "labelOffset": [
+     0,
+     -8
+    ]
+   },
+   {
+    "id": "F3",
+    "from": "D:XREFFILE",
+    "to": "P:P2",
+    "name": "カード索引レコード",
+    "items": [
+     "XREFFILE.XREF-CARD-NUM",
+     "XREFFILE.XREF-CUST-ID",
+     "XREFFILE.XREF-ACCT-ID"
+    ],
+    "lines": [
+     [
+      228,
+      230
+     ]
+    ],
+    "labelAnchor": "start",
+    "labelOffset": [
+     8,
+     4
+    ]
+   },
+   {
+    "id": "F4",
+    "from": "P:P2",
+    "to": "P:P3",
+    "name": "口座ID",
+    "items": [
+     "XREFFILE.XREF-ACCT-ID",
+     "ACCTFILE.ACCT-ID"
+    ],
+    "lines": [
+     [
+      175,
+      175
+     ]
+    ],
+    "note": "XREF-ACCT-ID を ACCT-ID へ移して、口座マスターのキーにします。",
+    "labelOffset": [
+     0,
+     -8
+    ]
+   },
+   {
+    "id": "F5",
+    "from": "D:ACCTFILE",
+    "to": "P:P3",
+    "name": "口座レコード",
+    "items": [
+     "ACCTFILE.ACCT-ID"
+    ],
+    "lines": [
+     [
+      242,
+      244
+     ]
+    ],
+    "note": "レコード全体を読みますが、使うのは口座IDだけです。残高や限度額は使いません。",
+    "labelAnchor": "start",
+    "labelOffset": [
+     8,
+     4
+    ]
+   },
+   {
+    "id": "F6",
+    "from": "P:P1",
+    "to": "P:P4",
+    "name": "取引レコード",
+    "items": [
+     "DALYTRAN.*"
+    ],
+    "lines": [
+     [
+      168,
+      168
+     ]
+    ],
+    "labelAnchor": "end",
+    "labelOffset": [
+     -8,
+     0
+    ]
+   },
+   {
+    "id": "F7",
+    "from": "P:P2",
+    "to": "P:P4",
+    "name": "カード照合結果",
+    "items": [
+     "DALYTRAN.DALYTRAN-CARD-NUM",
+     "DALYTRAN.DALYTRAN-ID",
+     "XREFFILE.XREF-CARD-NUM",
+     "XREFFILE.XREF-ACCT-ID",
+     "XREFFILE.XREF-CUST-ID"
+    ],
+    "lines": [
+     [
+      181,
+      183
+     ],
+     [
+      236,
+      238
+     ]
+    ],
+    "labelAnchor": "start",
+    "labelOffset": [
+     8,
+     0
+    ]
+   },
+   {
+    "id": "F8",
+    "from": "P:P3",
+    "to": "P:P4",
+    "name": "口座照合結果",
+    "items": [
+     "ACCTFILE.ACCT-ID"
+    ],
+    "lines": [
+     [
+      178,
+      178
+     ]
+    ],
+    "labelAnchor": "start",
+    "labelOffset": [
+     18,
+     16
+    ]
+   },
+   {
+    "id": "F9",
+    "from": "P:P4",
+    "to": "E:E2",
+    "name": "照合結果リスト",
+    "items": [],
+    "lines": [],
+    "note": "表示用の文字列です。項目としての定義はありません。",
+    "labelOffset": [
+     0,
+     -8
+    ]
+   }
+  ]
+ },
+ "errors": [
+  {
+   "event": "ファイルを開けない",
+   "where": "0000〜0500",
+   "cond": "状態 ≠ '00'",
+   "output": "ERROR OPENING …（ファイルごと）",
+   "after": "ABEND 999。残りのファイルは開かない",
+   "level": "err",
+   "node": "open"
+  },
+  {
+   "event": "日次取引の読込エラー",
+   "where": "1000",
+   "cond": "状態が '00'・'10' 以外",
+   "output": "ERROR READING DAILY TRANSACTION FILE",
+   "after": "ABEND 999。ファイルは閉じない",
+   "level": "err",
+   "node": "abend"
+  },
+  {
+   "event": "日次取引のEOF",
+   "where": "1000",
+   "cond": "状態 = '10'",
+   "output": "なし",
+   "after": "最後の1件をもう一度照合してから終了",
+   "level": "warn",
+   "node": "eof"
+  },
+  {
+   "event": "カードが索引に無い",
+   "where": "2000",
+   "cond": "INVALID KEY",
+   "output": "CARD NUMBER … COULD NOT BE VERIFIED",
+   "after": "その取引を飛ばして次へ",
+   "level": "none",
+   "node": "skip"
+  },
+  {
+   "event": "口座がマスターに無い",
+   "where": "3000",
+   "cond": "INVALID KEY",
+   "output": "ACCOUNT … NOT FOUND",
+   "after": "次の取引へ",
+   "level": "none",
+   "node": "noacct"
+  },
+  {
+   "event": "索引・口座の読込で INVALID KEY 以外のエラー",
+   "where": "2000, 3000",
+   "cond": "判定なし",
+   "output": "なし",
+   "after": "続行するかどうか未確認（USE宣言なし）",
+   "level": "warn",
+   "node": "xres"
+  },
+  {
+   "event": "ファイルを閉じられない",
+   "where": "9000〜9500",
+   "cond": "状態 ≠ '00'",
+   "output": "ERROR CLOSING …",
+   "after": "ABEND 999。日次取引だけ表示内容が食い違う",
+   "level": "err",
+   "node": "close"
+  }
+ ],
+ "workArea": {
+  "tran": "取引ID",
+  "card": "カード番号",
+  "acct": "口座ID",
+  "cust": "顧客ID",
+  "status": "ファイル状態",
+  "eof": "EOFフラグ"
+ },
+ "patterns": {
+  "sample": {
+   "name": "同梱サンプル3件",
+   "note": "sample/dailytran.txt の3件。照合成功・カード未登録・口座未登録を1件ずつ含みます。",
+   "steps": [
+    {
+     "node": "start",
+     "info": "プログラム開始",
+     "log": [
+      "START OF EXECUTION OF PROGRAM CBTRN01C"
+     ],
+     "ws": {
+      "eof": "N"
+     }
+    },
+    {
+     "node": "open",
+     "edge": "start>open",
+     "info": "6ファイルを開く（すべて '00'）"
+    },
+    {
+     "node": "read",
+     "edge": "open>read",
+     "info": "1件目を読む",
+     "ws": {
+      "tran": "0000000000000101",
+      "card": "0000000000000011",
+      "status": "00"
+     }
+    },
+    {
+     "node": "rres",
+     "edge": "read>rres",
+     "info": "ファイル状態 '00'：正常"
+    },
+    {
+     "node": "disp",
+     "edge": "rres>disp",
+     "info": "取引レコードを表示",
+     "log": [
+      "000000000000010101000 1POS       Sample purchase A … (カード 0000000000000011)"
+     ]
+    },
+    {
+     "node": "xref",
+     "edge": "disp>xref",
+     "info": "カード 0000000000000011 で索引を引く",
+     "ws": {
+      "acct": "00000000001",
+      "cust": "000000001"
+     }
+    },
+    {
+     "node": "xres",
+     "edge": "xref>xres",
+     "info": "索引にあり",
+     "log": [
+      "SUCCESSFUL READ OF XREF",
+      "CARD NUMBER: 0000000000000011",
+      "ACCOUNT ID : 00000000001",
+      "CUSTOMER ID: 000000001"
+     ]
+    },
+    {
+     "node": "acct",
+     "edge": "xres>acct",
+     "info": "口座 00000000001 で口座マスターを引く"
+    },
+    {
+     "node": "ares",
+     "edge": "acct>ares",
+     "info": "口座あり：照合成功",
+     "log": [
+      "SUCCESSFUL READ OF ACCOUNT FILE"
+     ]
+    },
+    {
+     "node": "loop",
+     "edge": "ares>loop",
+     "info": "EOFではないので次の1件へ"
+    },
+    {
+     "node": "read",
+     "edge": "loop>read",
+     "info": "2件目を読む",
+     "ws": {
+      "tran": "0000000000000102",
+      "card": "0000000000000099",
+      "status": "00"
+     }
+    },
+    {
+     "node": "rres",
+     "edge": "read>rres",
+     "info": "ファイル状態 '00'：正常"
+    },
+    {
+     "node": "disp",
+     "edge": "rres>disp",
+     "info": "取引レコードを表示",
+     "log": [
+      "000000000000010201000 1POS       Sample purchase B … (カード 0000000000000099)"
+     ]
+    },
+    {
+     "node": "xref",
+     "edge": "disp>xref",
+     "info": "カード 0000000000000099 で索引を引く",
+     "ws": {
+      "acct": "—",
+      "cust": "—"
+     }
+    },
+    {
+     "node": "xres",
+     "edge": "xref>xres",
+     "info": "索引に無い",
+     "log": [
+      "INVALID CARD NUMBER FOR XREF"
+     ]
+    },
+    {
+     "node": "skip",
+     "edge": "xres>skip",
+     "info": "カード未登録を表示してスキップ",
+     "log": [
+      "CARD NUMBER 0000000000000099 COULD NOT BE VERIFIED. SKIPPING TRANSACTION ID-0000000000000102"
+     ]
+    },
+    {
+     "node": "loop",
+     "edge": "skip>loop",
+     "info": "EOFではないので次の1件へ"
+    },
+    {
+     "node": "read",
+     "edge": "loop>read",
+     "info": "3件目を読む",
+     "ws": {
+      "tran": "0000000000000103",
+      "card": "0000000000000022",
+      "status": "00"
+     }
+    },
+    {
+     "node": "rres",
+     "edge": "read>rres",
+     "info": "ファイル状態 '00'：正常"
+    },
+    {
+     "node": "disp",
+     "edge": "rres>disp",
+     "info": "取引レコードを表示",
+     "log": [
+      "000000000000010301000 1POS       Sample purchase C … (カード 0000000000000022)"
+     ]
+    },
+    {
+     "node": "xref",
+     "edge": "disp>xref",
+     "info": "カード 0000000000000022 で索引を引く",
+     "ws": {
+      "acct": "00000000002",
+      "cust": "000000002"
+     }
+    },
+    {
+     "node": "xres",
+     "edge": "xref>xres",
+     "info": "索引にあり",
+     "log": [
+      "SUCCESSFUL READ OF XREF",
+      "CARD NUMBER: 0000000000000022",
+      "ACCOUNT ID : 00000000002",
+      "CUSTOMER ID: 000000002"
+     ]
+    },
+    {
+     "node": "acct",
+     "edge": "xres>acct",
+     "info": "口座 00000000002 で口座マスターを引く"
+    },
+    {
+     "node": "ares",
+     "edge": "acct>ares",
+     "info": "口座マスターに無い",
+     "log": [
+      "INVALID ACCOUNT NUMBER FOUND"
+     ]
+    },
+    {
+     "node": "noacct",
+     "edge": "ares>noacct",
+     "info": "口座未登録を表示",
+     "log": [
+      "ACCOUNT 00000000002 NOT FOUND"
+     ]
+    },
+    {
+     "node": "loop",
+     "edge": "noacct>loop",
+     "info": "EOFではないので次の1件へ"
+    },
+    {
+     "node": "read",
+     "edge": "loop>read",
+     "info": "4回目の読込でEOF",
+     "ws": {
+      "status": "10"
+     }
+    },
+    {
+     "node": "rres",
+     "edge": "read>rres",
+     "info": "ファイル状態 '10'：EOF"
+    },
+    {
+     "node": "eof",
+     "edge": "rres>eof",
+     "info": "EOFを記録。作業領域には3件目が残っている",
+     "ws": {
+      "eof": "Y"
+     },
+     "flag": "warn"
+    },
+    {
+     "node": "xref",
+     "edge": "eof>xref",
+     "info": "3件目のカードでもう一度索引を引く",
+     "flag": "warn"
+    },
+    {
+     "node": "xres",
+     "edge": "xref>xres",
+     "info": "索引にあり（2回目）",
+     "log": [
+      "SUCCESSFUL READ OF XREF",
+      "CARD NUMBER: 0000000000000022",
+      "ACCOUNT ID : 00000000002",
+      "CUSTOMER ID: 000000002"
+     ],
+     "flag": "warn"
+    },
+    {
+     "node": "acct",
+     "edge": "xres>acct",
+     "info": "口座 00000000002 をもう一度引く",
+     "flag": "warn"
+    },
+    {
+     "node": "ares",
+     "edge": "acct>ares",
+     "info": "口座マスターに無い（2回目）",
+     "log": [
+      "INVALID ACCOUNT NUMBER FOUND"
+     ],
+     "flag": "warn"
+    },
+    {
+     "node": "noacct",
+     "edge": "ares>noacct",
+     "info": "同じメッセージが2回出る",
+     "log": [
+      "ACCOUNT 00000000002 NOT FOUND"
+     ],
+     "flag": "warn"
+    },
+    {
+     "node": "loop",
+     "edge": "noacct>loop",
+     "info": "EOFなのでループを抜ける"
+    },
+    {
+     "node": "close",
+     "edge": "loop>close",
+     "info": "6ファイルを閉じる"
+    },
+    {
+     "node": "end",
+     "edge": "close>end",
+     "info": "終了",
+     "log": [
+      "END OF EXECUTION OF PROGRAM CBTRN01C"
+     ]
+    }
+   ]
+  },
+  "empty": {
+   "name": "空入力（0件）",
+   "note": "日次取引が0件のとき。作業領域にVALUE句がないため、原本での初期値は未確認です（ここでは空白と仮定）。",
+   "steps": [
+    {
+     "node": "start",
+     "info": "プログラム開始",
+     "log": [
+      "START OF EXECUTION OF PROGRAM CBTRN01C"
+     ],
+     "ws": {
+      "eof": "N",
+      "tran": "                ",
+      "card": "                "
+     }
+    },
+    {
+     "node": "open",
+     "edge": "start>open",
+     "info": "6ファイルを開く"
+    },
+    {
+     "node": "read",
+     "edge": "open>read",
+     "info": "1回目の読込でEOF",
+     "ws": {
+      "status": "10"
+     }
+    },
+    {
+     "node": "rres",
+     "edge": "read>rres",
+     "info": "ファイル状態 '10'：EOF"
+    },
+    {
+     "node": "eof",
+     "edge": "rres>eof",
+     "info": "EOFを記録。作業領域は初期値のまま（原本では未確認）",
+     "ws": {
+      "eof": "Y"
+     },
+     "flag": "warn"
+    },
+    {
+     "node": "xref",
+     "edge": "eof>xref",
+     "info": "空白のカード番号で索引を引く",
+     "ws": {
+      "acct": "—",
+      "cust": "—"
+     },
+     "flag": "warn"
+    },
+    {
+     "node": "xres",
+     "edge": "xref>xres",
+     "info": "索引に無い",
+     "log": [
+      "INVALID CARD NUMBER FOR XREF"
+     ],
+     "flag": "warn"
+    },
+    {
+     "node": "skip",
+     "edge": "xres>skip",
+     "info": "取引が無いのにスキップのメッセージが出る",
+     "log": [
+      "CARD NUMBER                  COULD NOT BE VERIFIED. SKIPPING TRANSACTION ID-                "
+     ],
+     "flag": "warn"
+    },
+    {
+     "node": "loop",
+     "edge": "skip>loop",
+     "info": "EOFなのでループを抜ける"
+    },
+    {
+     "node": "close",
+     "edge": "loop>close",
+     "info": "6ファイルを閉じる"
+    },
+    {
+     "node": "end",
+     "edge": "close>end",
+     "info": "終了",
+     "log": [
+      "END OF EXECUTION OF PROGRAM CBTRN01C"
+     ]
+    }
+   ]
+  },
+  "ioerr": {
+   "name": "読込エラー",
+   "note": "日次取引の読込でファイル状態30（永続エラー）が返った例です。",
+   "steps": [
+    {
+     "node": "start",
+     "info": "プログラム開始",
+     "log": [
+      "START OF EXECUTION OF PROGRAM CBTRN01C"
+     ],
+     "ws": {
+      "eof": "N"
+     }
+    },
+    {
+     "node": "open",
+     "edge": "start>open",
+     "info": "6ファイルを開く"
+    },
+    {
+     "node": "read",
+     "edge": "open>read",
+     "info": "読込でファイル状態30",
+     "ws": {
+      "status": "30"
+     }
+    },
+    {
+     "node": "rres",
+     "edge": "read>rres",
+     "info": "'00' でも '10' でもない：読込エラー"
+    },
+    {
+     "node": "abend",
+     "edge": "rres>abend",
+     "info": "ファイル状態を表示してアベンド。ファイルは閉じない",
+     "log": [
+      "ERROR READING DAILY TRANSACTION FILE",
+      "FILE STATUS IS: NNNN0030",
+      "ABENDING PROGRAM"
+     ],
+     "flag": "err"
+    }
+   ]
+  }
+ },
+ "openItems": [
+  "JCL・ジョブ定義：起動条件、前後のジョブ、DD名に割り当てる実ファイル",
+  "空入力時の作業領域の初期値（VALUE句なし）",
+  "索引・口座の読込で INVALID KEY 以外のエラーが起きたときの動作",
+  "顧客・カード・取引の3ファイルを開くだけで使わない理由",
+  "9000-DALYTRAN-CLOSE の表示内容の食い違い",
+  "照合結果（標準出力）を誰が・どう使うか"
+ ]
+}

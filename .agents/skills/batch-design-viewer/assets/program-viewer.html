@@ -1,0 +1,503 @@
+<title>@TITLE@</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/*@CORE_CSS@*/
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <h1 id="h-title"></h1>
+    <span class="pg" id="h-pg"></span>
+    <span class="demo" id="h-link"></span>
+  </header>
+  <div class="layout">
+    <nav class="rail" aria-label="読む順">
+      <p class="cap">読む順</p>
+      <ol id="rail"></ol>
+      <p class="railnote">上から順に読むと、目的 → データ → 骨格 → 例外 → 細部の順で理解できます。<br>共通ID：P プロセス、F データフロー、D データストア、DI データ項目。</p>
+    </nav>
+    <main id="main"></main>
+  </div>
+</div>
+
+<script>
+const V = "@VIEW@";
+/*@CORE_JS@*/
+
+/* ---------- データ ---------- */
+const SRC = V.source;
+const NODES = V.flow.nodes, NB = Object.fromEntries(NODES.map(n => [n.id, n]));
+const STORES = V.stores, SB = Object.fromEntries(STORES.map(s => [s.dd, s]));
+const FIELDS = V.fields, LOG = V.items, IB = Object.fromEntries(LOG.map(i => [i.id, i]));
+const DFD = V.dfd;
+const PB = Object.fromEntries(DFD.processes.map(p => [p.id, p]));
+const EB = Object.fromEntries(DFD.externals.map(e => [e.id, e]));
+const FB = Object.fromEntries(DFD.flows.map(f => [f.id, f]));
+const PATTERNS = V.patterns;
+const USE_PILL = { "個別参照": "ok", "レコード一括": "rec", "定義のみ": "none" };
+const isSide = (id) => NB[id].lane !== "main";
+const useLabel = (s) => {
+  const c = s.crud;
+  if (c === "O") return "開閉のみ";
+  return c.split("").map(x => x === "R" ? (s.access === "順次" ? "R（全件）" : "R（キー）") : `${x}（${{ C: "作成", U: "更新", D: "削除" }[x]}）`).join(" ");
+};
+
+const VIEWS = [
+  { id: "overview", t: "概要と合意事項", d: "何のためのバッチか。何が決まり、何が未確認か" },
+  { id: "jobflow", t: "ジョブフロー", d: "前後のジョブと、入出力ファイル" },
+  { id: "dfd", t: "DFD", d: "データがどこから来て、どこへ行くか" },
+  { id: "db", t: "DB・ファイル一覧", d: "データストアとレコードレイアウト" },
+  { id: "items", t: "データ項目定義", d: "項目の意味・型・格納先・使用箇所" },
+  { id: "flow", t: "処理フロー", d: "骨格と正常系。図を押すと根拠コード" },
+  { id: "errors", t: "例外と異常系", d: "失敗したら、どこへ進み何が出るか" },
+  { id: "trace", t: "処理パターン", d: "サンプル入力で1ステップずつたどる" },
+  { id: "coverage", t: "網羅と未確認", d: "図から漏れた行と、残りの確認事項" },
+];
+const state = {
+  view: "overview", sel: (NODES.find(n => n.type === "pre" && n.lane === "main" && !n.routine) || NODES[0]).id, showErr: true,
+  pattern: Object.keys(PATTERNS)[0], step: 0, itemFilter: "all",
+  selBy: { dfd: "P:" + (DFD.processes[1] || DFD.processes[0]).id, db: "D:" + (STORES.find(s => s.crud !== "O") || STORES[0]).dd, items: "I:" + LOG[0].id },
+};
+
+/* ---------- つながり ---------- */
+function nodesOfLines(ranges) {
+  const s = new Set();
+  ranges.forEach(([a, b]) => { for (let i = a; i <= b; i++) NODES.forEach(n => { if (n.lines.some(([x, y]) => i >= x && i <= y)) s.add(n.id); }); });
+  return s;
+}
+function related(k) {
+  const [t, id] = sp(k), out = { P: new Set(), F: new Set(), E: new Set(), D: new Set(), I: new Set(), N: new Set() };
+  const addFlow = (f) => { out.F.add(f.id); [f.from, f.to].forEach(r => { const [tt, ii] = sp(r); out[tt].add(ii); }); };
+  const addItems = (keys) => keys.forEach(fk => out.I.add(FIELDS[fk].item));
+  if (t === "P" || t === "D" || t === "E") DFD.flows.filter(f => f.from === k || f.to === k).forEach(f => { addFlow(f); addItems(f.items); });
+  if (t === "P") PB[id].nodes.forEach(n => out.N.add(n));
+  if (t === "D") SB[id].nodes.forEach(n => out.N.add(n));
+  if (t === "F") { addFlow(FB[id]); addItems(FB[id].items); nodesOfLines(FB[id].lines || []).forEach(n => out.N.add(n)); }
+  if (t === "I") {
+    const it = IB[id];
+    it.fields.forEach(fk => out.D.add(FIELDS[fk].store));
+    DFD.flows.filter(f => f.items.some(x => it.fields.includes(x))).forEach(addFlow);
+    nodesOfLines(it.fields.flatMap(fk => FIELDS[fk].direct.map(i => [i, i]))).forEach(n => out.N.add(n));
+  }
+  if (t === "N") {
+    const n = NB[id];
+    DFD.processes.filter(p => p.nodes.includes(id)).forEach(p => out.P.add(p.id));
+    STORES.filter(s => s.nodes.includes(id)).forEach(s => out.D.add(s.dd));
+    Object.values(FIELDS).filter(f => f.direct.some(i => n.lines.some(([a, b]) => i >= a && i <= b))).forEach(f => out.I.add(f.item));
+    DFD.flows.filter(f => (f.lines || []).some(([a, b]) => n.lines.some(([x, y]) => a <= y && b >= x))).forEach(f => out.F.add(f.id));
+  }
+  out[t].delete(id);
+  return out;
+}
+function chipLabel(k) {
+  const [t, id] = sp(k);
+  if (t === "P") return `${id} ${PB[id].name.join("")}`;
+  if (t === "F") return `${id} ${FB[id].name}`;
+  if (t === "E") return `${id} ${EB[id].name}`;
+  if (t === "D") return `${SB[id].no} ${SB[id].name}`;
+  if (t === "I") return `${id} ${IB[id].name}`;
+  return NB[id].label;
+}
+const ORDER = (k) => { const [t, id] = sp(k); return t === "N" ? String(NODES.findIndex(n => n.id === id)).padStart(3, "0") : t === "D" ? SB[id].no : id; };
+const sorted = (keys) => [...keys].sort((a, b) => ORDER(a) < ORDER(b) ? -1 : 1);
+function relHtml(k) {
+  const r = related(k);
+  return relBox([
+    ["DFD", sorted([...[...r.P].map(x => "P:" + x), ...[...r.F].map(x => "F:" + x), ...[...r.E].map(x => "E:" + x)])],
+    ["DB・ファイル", sorted([...r.D].map(x => "D:" + x))],
+    ["データ項目", sorted([...r.I].map(x => "I:" + x))],
+    ["処理フロー", sorted([...r.N].map(x => "N:" + x))],
+  ]);
+}
+function goSel(k) {
+  const [t, id] = sp(k);
+  const view = { P: "dfd", F: "dfd", E: "dfd", D: "db", I: "items", N: "flow" }[t];
+  if (t === "N") state.sel = id; else state.selBy[view] = k;
+  show(view);
+}
+
+/* ---------- 処理フロー図（JIS X 0121 の記号） ---------- */
+function shapeSvg(n) {
+  const x = n.x - n.w / 2, y = n.y - n.h / 2;
+  if (n.type === "dec") return `<polygon class="shape" points="${n.x},${y} ${n.x + n.w / 2},${n.y} ${n.x},${y + n.h} ${x},${n.y}"/>`;
+  if (n.type === "term") return `<rect class="shape" x="${x}" y="${y}" width="${n.w}" height="${n.h}" rx="${n.h / 2}"/>`;
+  let s = `<rect class="shape" x="${x}" y="${y}" width="${n.w}" height="${n.h}" rx="2"/>`;
+  if (n.type === "pre") s += `<line class="pl" x1="${x + 10}" y1="${y}" x2="${x + 10}" y2="${y + n.h}"/><line class="pl" x1="${x + n.w - 10}" y1="${y}" x2="${x + n.w - 10}" y2="${y + n.h}"/>`;
+  return s;
+}
+function flowSvg() {
+  const [w, h] = V.flow.size;
+  let s = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;min-width:560px;max-width:${w}px;height:auto;display:block;margin:0 auto" role="img" aria-label="${esc(V.meta.program)}の処理フロー">
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+  <style>.pl{stroke:var(--ink);stroke-width:1.2}.node.warn .pl{stroke:var(--warn)}.node.err .pl{stroke:var(--err)}</style>`;
+  V.flow.edges.forEach(e => {
+    const id = `${e.from}>${e.to}`;
+    s += `<polyline data-e="${id}" class="edge ${e.kind || ""} ${e.dash ? "dash" : ""}" points="${e.pts.map(p => p.join(",")).join(" ")}" marker-end="url(#ah)"/>`;
+    if (e.label) s += `<text data-el="${id}" class="lbl" x="${e.labelAt[0]}" y="${e.labelAt[1]}" text-anchor="${e.labelAt[2] || "start"}">${esc(e.label)}</text>`;
+  });
+  NODES.forEach(n => {
+    s += `<g class="node ${n.kind || ""} ${n.routine ? "routine" : ""}" data-n="${n.id}" tabindex="0" role="button" aria-label="${esc(n.label)}">${shapeSvg(n)}
+      <text x="${n.x}" y="${n.y + (n.sub ? -3 : 4)}" text-anchor="middle" font-size="${n.type === "dec" ? 12.5 : 13}" font-weight="500">${esc(n.label)}</text>
+      ${n.sub ? `<text class="sub" x="${n.x}" y="${n.y + 13}" text-anchor="middle">${esc(n.sub)}</text>` : ""}</g>`;
+  });
+  (V.flow.notes || []).forEach(nt => {
+    s += `<g class="note"><rect x="${nt.x}" y="${nt.y}" width="${nt.w}" height="${nt.h}" rx="6"/>
+      <text x="${nt.x + 12}" y="${nt.y + 22}" font-weight="700" style="fill:var(--warn)">${esc(nt.title)}</text>
+      ${nt.lines.map((l, i) => `<text x="${nt.x + 12}" y="${nt.y + 44 + i * 18}">${esc(l)}</text>`).join("")}</g>`;
+  });
+  return s + `</svg>`;
+}
+function paintFlow(root) {
+  const t = state.view === "trace" ? PATTERNS[state.pattern].steps : null;
+  const walked = new Set();
+  let cur = null;
+  if (t) { for (let i = 0; i <= state.step; i++) if (t[i].edge) walked.add(t[i].edge); cur = t[state.step].node; }
+  root.querySelectorAll(".node").forEach(g => {
+    const id = g.dataset.n;
+    g.classList.toggle("sel", !t && id === state.sel);
+    g.classList.toggle("cur", id === cur);
+    g.classList.toggle("dim", !state.showErr && isSide(id));
+  });
+  const hide = (a, b, el) => !state.showErr && (isSide(a) || isSide(b) || (el && el.classList.contains("dash")));
+  root.querySelectorAll(".edge").forEach(p => { const [a, b] = p.dataset.e.split(">"); p.classList.toggle("walked", walked.has(p.dataset.e)); p.classList.toggle("dim", hide(a, b, p)); });
+  root.querySelectorAll("[data-el]").forEach(x => { const [a, b] = x.dataset.el.split(">"); x.style.opacity = hide(a, b, root.querySelector(`[data-e="${x.dataset.el}"]`)) ? .2 : 1; });
+  root.querySelectorAll(".note").forEach(n => { n.style.opacity = state.showErr ? 1 : .2; });
+}
+function bindFlow(root, onPick) {
+  root.querySelectorAll(".node").forEach(g => {
+    const pick = () => onPick(g.dataset.n);
+    g.addEventListener("click", pick);
+    g.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(); } });
+  });
+}
+function detailHtml(id) {
+  const n = NB[id];
+  let h = `<div class="dhead"><h3>${esc(n.label)}</h3><span class="orig">${esc(n.orig || "")}</span></div><div class="dbody"><p>${esc(n.desc || "")}</p>`;
+  h += `<div><div class="ranges">${n.lines.map(([a, b]) => `<button data-jump="${a}">${a}〜${b}行</button>`).join("")}</div></div>`;
+  h += relHtml("N:" + id);
+  const rt = n.routine && V.flow.routines[n.routine];
+  if (rt) {
+    h += `<div class="scroll"><table><thead><tr>${rt.columns.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>
+      ${rt.rows.map((r, i) => `<tr class="${(rt.diffRows || []).includes(i) ? "diff" : ""}">${r.map((c, j) => `<td class="${j ? "" : "mono"}">${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    if (rt.note) h += `<div class="callout">${esc(rt.note)}</div>`;
+    h += `<p class="ev">同じ形の段落をまとめて1つの箱にしています。代表として先頭の段落を表示します。</p>`;
+    h += srcBlock(SRC, [rt.sample], rt.highlight || []);
+  } else h += srcBlock(SRC, n.lines);
+  return h + `</div>`;
+}
+
+/* ---------- 各画面 ---------- */
+const R = {};
+R.overview = () => {
+  const o = V.overview;
+  return `<div class="viewhead"><h2>概要と合意事項</h2><span class="doctag">設計書でいうと：バッチ処理一覧・処理概要</span></div>
+  <p class="lead">このバッチが何をするかを1画面で示します。合意が必要な観点ごとに、コードから確認できたこと（根拠あり）と、資料が足りず確認できないこと（未確認）を分けます。</p>
+  <div class="panel docmap"><b>設計書のつながり</b>
+    <div class="dm">
+      <button data-v="dfd"><b>DFD</b><span>P・F・D</span></button><span class="ar">D番号<br>→</span>
+      <button data-v="db"><b>DB・ファイル一覧</b><span>D・DD名</span></button><span class="ar">COPY句<br>→</span>
+      <button data-v="items"><b>データ項目定義</b><span>DI</span></button><span class="ar">使用行<br>→</span>
+      <button data-v="flow"><b>処理フロー</b><span>段落・行範囲</span></button><span class="ar">行番号<br>→</span>
+      <button data-v="coverage"><b>原本コード</b><span>1〜${V.meta.lines}行</span></button>
+    </div>
+    <p class="lead" style="margin:10px 0 0">DFDのプロセス（P）は処理フローの段落に、データフロー（F）は運ぶデータ項目（DI）に、データストア（D）はDB・ファイル一覧の行につながります。どの資料を開いても、右側の「つながり」から他の資料の該当箇所へ移れます。</p>
+  </div>
+  <div class="panel summary">${o.summary.map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join("")}</div>
+  <div class="checks">${o.checks.map(c => `<div class="panel check"><h3>${esc(c.title)}${pill(c.status, c.label)}</h3><p>${esc(c.text)}</p><span class="ev">根拠：${esc(c.evidence)}</span></div>`).join("")}</div>`;
+};
+
+R.jobflow = () => {
+  const c = V.context, ins = STORES.filter(s => /[RO]/.test(s.crud) && !/[CUD]/.test(s.crud)), outs = STORES.filter(s => /[CUD]/.test(s.crud));
+  const outBoxes = [...outs.map(s => ({ name: `${s.no} ${s.name}`, sub: `${s.dd} · ${useLabel(s)}` })), ...(c.outputs || [])];
+  const H = Math.max(430, ins.length * 52 + 120, outBoxes.length * 60 + 120), mid = H / 2;
+  let s = `<svg viewBox="0 0 760 ${H}" style="width:100%;max-width:760px;height:auto;display:block" role="img" aria-label="ジョブフロー">
+  <defs><marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+  <g class="file unknown"><rect x="300" y="12" width="160" height="40" rx="4"/></g>
+  <text x="380" y="30" text-anchor="middle" font-size="12">${esc(c.prev.label)}</text><text class="sub" x="380" y="44" text-anchor="middle">${esc(c.prev.sub)}</text>
+  <polyline class="edge dash" points="380,52 380,${mid - 35}" marker-end="url(#ah2)"/>
+  <g class="prog"><rect x="290" y="${mid - 35}" width="180" height="70" rx="8"/></g>
+  <text x="380" y="${mid - 5}" text-anchor="middle" font-weight="700">${esc(V.meta.program)}</text>
+  <text class="sub" x="380" y="${mid + 13}" text-anchor="middle">${esc(V.meta.title)}</text>
+  <polyline class="edge dash" points="380,${mid + 35} 380,${H - 60}" marker-end="url(#ah2)"/>
+  <g class="file unknown"><rect x="300" y="${H - 60}" width="160" height="40" rx="4"/></g>
+  <text x="380" y="${H - 42}" text-anchor="middle" font-size="12">${esc(c.next.label)}</text><text class="sub" x="380" y="${H - 28}" text-anchor="middle">${esc(c.next.sub)}</text>`;
+  const y0 = mid - (ins.length * 52) / 2;
+  ins.forEach((st, i) => {
+    const y = y0 + i * 52, un = st.crud === "O";
+    s += `<g class="file ${un ? "unused" : ""}" data-go="D:${st.dd}" style="cursor:pointer"><rect x="20" y="${y}" width="170" height="42" rx="4"/>
+      <text x="32" y="${y + 18}" font-size="12.5" font-weight="500">${esc(st.name)}</text>
+      <text class="sub" x="32" y="${y + 33}">${esc(st.dd)} · ${esc(useLabel(st))}</text></g>
+      <polyline class="edge ${un ? "dash" : ""}" points="190,${y + 21} 240,${y + 21} 240,${mid} 290,${mid}" ${un ? "" : 'marker-end="url(#ah2)"'}/>`;
+  });
+  const o0 = mid - (outBoxes.length * 60) / 2;
+  outBoxes.forEach((o, i) => {
+    const y = o0 + i * 60;
+    s += `<g class="file"><rect x="580" y="${y}" width="170" height="46" rx="4"/></g>
+      <text x="665" y="${y + 20}" text-anchor="middle" font-size="12.5" font-weight="500">${esc(o.name)}</text>
+      <text class="sub" x="665" y="${y + 36}" text-anchor="middle">${esc(o.sub)}</text>
+      <polyline class="edge" points="470,${mid} 525,${mid} 525,${y + 23} 580,${y + 23}" marker-end="url(#ah2)"/>`;
+  });
+  s += `</svg>`;
+  return `<div class="viewhead"><h2>ジョブフロー</h2><span class="doctag">設計書でいうと：ジョブフロー図・入出力関連図</span></div>
+  <p class="lead">プログラムを1つの箱として見たときの入出力です。実線は実際に読み書きするファイル、破線は開くだけで中身を読まないファイルです。${V.links.job ? "ジョブ全体のつながりは右上のリンクから開けます。" : ""}</p>
+  <div class="panel scroll" style="padding:12px">${s}</div>
+  ${c.note ? `<div class="section-gap"></div><div class="callout">${esc(c.note)}</div>` : ""}`;
+};
+
+/* DFD */
+function dfdModel() {
+  const nodes = [
+    ...DFD.externals.map(e => ({ key: "E:" + e.id, shape: "rect", x: e.x + e.w / 2, y: e.y + e.h / 2, w: e.w, h: e.h, no: e.id, title: e.name, sub: e.sub })),
+    ...DFD.processes.map(p => ({ key: "P:" + p.id, shape: "circle", x: p.x, y: p.y, r: 56, no: p.id, lines: p.name })),
+    ...STORES.filter(s => DFD.stores[s.dd]).map(s => { const [x, y] = DFD.stores[s.dd]; return { key: "D:" + s.dd, shape: "store", x: x + 87, y: y + 22, w: 175, h: 44, no: s.no, title: s.name, sub: s.dd + (s.crud === "O" ? " · 開閉のみ" : ""), cls: s.crud === "O" ? "unused" : "" }; }),
+  ];
+  const flows = DFD.flows.map(f => ({ key: "F:" + f.id, from: f.from, to: f.to, label: `${f.id} ${f.name}`, cls: f.est ? "est" : "", la: f.labelAnchor, lo: f.labelOffset }));
+  return { width: DFD.width || 1000, height: DFD.height || 500, nodes, flows };
+}
+function itemTable(keys) {
+  if (!keys.length) return "";
+  return `<div class="scroll"><table><thead><tr><th>データ項目</th><th>物理項目</th><th>型</th></tr></thead><tbody>
+    ${keys.map(fk => { const f = FIELDS[fk]; return `<tr><td><button class="chip" data-go="I:${f.item}">${f.item} ${esc(IB[f.item].name)}</button></td><td class="mono">${esc(f.name)}</td><td class="mono">${esc(f.pic)}</td></tr>`; }).join("")}</tbody></table></div>`;
+}
+function dfdDetail(k) {
+  const [t, id] = sp(k);
+  let head = "", body = "";
+  if (t === "P") { const p = PB[id]; head = `<h3>${id} ${esc(p.name.join(""))}</h3><span class="orig">${esc(p.para || "")}</span>`; body = `<p>${esc(p.desc || "")}</p>`; }
+  if (t === "E") { const e = EB[id]; head = `<h3>${id} ${esc(e.name)}</h3><span class="orig">外部</span>`; body = `<p>${esc(e.desc || "")}</p>`; }
+  if (t === "D") { const s = SB[id]; head = `<h3>${s.no} ${esc(s.name)}</h3><span class="orig">${s.dd} · ${esc(s.cb)}</span>`; body = `<p>${s.crud === "O" ? "このバッチでは開いて閉じるだけで、データの流れはありません。" : "このバッチが使うデータストアです（" + esc(useLabel(s)) + "）。"}</p><div><button class="chip" data-go="D:${id}">DB・ファイル一覧で開く</button></div>`; }
+  if (t === "F") {
+    const f = FB[id];
+    head = `<h3>${id} ${esc(f.name)}</h3><span class="orig">${esc(chipLabel(f.from))} → ${esc(chipLabel(f.to))}</span>`;
+    body = (f.note ? `<p>${esc(f.note)}</p>` : "") + (f.items.length ? `<b class="rh">運ぶデータ項目（${f.items.length}）</b>${itemTable(f.items)}` : "") + ((f.lines || []).length ? `<b class="rh">根拠のコード</b>${srcBlock(SRC, f.lines)}` : "");
+  }
+  return `<div class="dhead">${head}</div><div class="dbody">${body}${relHtml(k)}</div>`;
+}
+R.dfd = () => `<div class="viewhead"><h2>DFD</h2><span class="doctag">設計書でいうと：DFD（データフロー図）</span></div>
+  <p class="lead">データがどこから来て、どの処理を通り、どこへ行くかを示します。丸がプロセス、左端に番号を付けた箱がデータストア（DB・ファイル）、四角が外部です。要素や矢印を押すと、運ぶデータ項目と、他の資料とのつながりが右に出ます。ファイルを開く・閉じるなどの制御は、DFDでは扱いません。</p>
+  <div class="flowgrid">
+    <div class="panel"><div class="scroll">${dfdSvg(dfdModel(), state.selBy.dfd)}</div>
+      <div class="legend"><span><i class="term"></i>プロセス</span><span><i style="border-width:1.3px 0;box-shadow:inset 1.3px 0 0 var(--ink)"></i>データストア</span><span><i></i>外部</span><span>破線：推定、または開閉のみ</span></div></div>
+    <aside class="panel detail" id="detail">${dfdDetail(state.selBy.dfd)}</aside>
+  </div>`;
+
+/* DB・ファイル一覧 */
+const useCls = (f) => f.name === "FILLER" ? "u-fill" : { "個別参照": "u-ok", "レコード一括": "u-rec", "定義のみ": "u-none" }[f.use];
+function dbDetail(dd) {
+  const s = SB[dd], fs = s.fields.map(k => FIELDS[k]).sort((a, b) => a.pos[0] - b.pos[0]);
+  const used = fs.filter(f => f.use === "個別参照").length;
+  return `<div class="dhead"><h3>${s.no} ${esc(s.name)}</h3><span class="orig">${s.dd} · ${s.cb === "—" ? "COPY句なし" : "COPY " + esc(s.cb)} · ${esc(s.record || "")}</span></div><div class="dbody">
+    <dl class="dl"><dt>編成・アクセス</dt><dd>${esc(s.org)}・${esc(s.access)}</dd><dt>キー</dt><dd>${esc(s.key)}</dd><dt>レコード長</dt><dd>${s.len}バイト・${fs.length}項目</dd><dt>CRUD</dt><dd>${esc(useLabel(s))}</dd><dt>このバッチで使う項目</dt><dd>${used}項目</dd></dl>
+    ${s.crud === "O" ? `<div class="callout">このバッチでは開いて閉じるだけで、どの項目も使いません。</div>` : ""}
+    <div><b class="rh">レコードレイアウト</b>${layoutBar(fs, s.len, s.name, useCls)}
+      <div class="legend" style="padding:4px 0 0;border:0"><span><i style="background:var(--accent);border-color:var(--accent)"></i>個別に参照</span><span><i style="background:var(--accent-soft);border-color:var(--accent)"></i>レコードごと扱う</span><span><i style="background:var(--line);border-color:var(--line)"></i>使わない</span><span><i style="background:var(--sunken)"></i>予備領域</span></div></div>
+    <div class="scroll"><table><thead><tr><th class="num">位置</th><th>物理項目</th><th>データ項目</th><th>型</th><th>使い方</th></tr></thead><tbody>
+      ${fs.map(f => `<tr><td class="num mono">${f.pos[0]}–${f.pos[1]}</td><td class="mono">${esc(f.name)}</td><td><button class="chip" data-go="I:${f.item}">${f.item}</button></td><td class="mono">${esc(f.pic)}</td><td>${pill(USE_PILL[f.use], f.use)}</td></tr>`).join("")}
+    </tbody></table></div>
+    ${s.ops.length ? `<b class="rh">入出力文</b><div class="scroll"><table><tbody>${s.ops.map(o => `<tr><td class="mono">${o.verb}</td><td class="mono">${o.line}行</td><td class="mono">${esc(o.paragraph || "")}</td></tr>`).join("")}</tbody></table></div>` : ""}
+    ${relHtml("D:" + dd)}
+    <b class="rh">定義のコード（SELECT・FD・COPY）</b>${srcBlock(SRC, s.src)}
+  </div>`;
+}
+R.db = () => {
+  const [, dd] = sp(state.selBy.db);
+  return `<div class="viewhead"><h2>DB・ファイル一覧</h2><span class="doctag">設計書でいうと：DB一覧・ファイル一覧・レコードレイアウト</span></div>
+  <p class="lead">データストアごとの編成・キー・使われ方です。D番号はDFDのデータストアと共通です。行を押すと、レコードレイアウトと、実際に使っている項目が右に出ます。項目と位置はCOPY句から抽出しています。</p>
+  <div class="flowgrid">
+    <div class="panel scroll"><table>
+      <thead><tr><th>D番号</th><th>DD名</th><th>名称</th><th>編成</th><th>キー</th><th class="num">長さ</th><th class="num">項目</th><th class="num">使う</th><th>CRUD</th></tr></thead>
+      <tbody>${STORES.map(s => { const fs = s.fields.map(k => FIELDS[k]); return `<tr data-sel="D:${s.dd}" class="${s.dd === dd ? "selrow" : ""} ${s.crud === "O" ? "io-unused" : ""}"><td class="mono">${s.no}</td><td class="mono">${s.dd}</td><td>${esc(s.name)}</td><td>${esc(s.org)}</td><td>${esc(s.key)}</td><td class="num">${s.len}</td><td class="num">${fs.length}</td><td class="num">${fs.filter(f => f.use === "個別参照").length}</td><td>${pill(s.crud === "O" ? "none" : "ok", useLabel(s))}</td></tr>`; }).join("")}</tbody>
+    </table></div>
+    <aside class="panel detail" id="detail">${dbDetail(dd)}</aside>
+  </div>`;
+};
+
+/* データ項目定義 */
+function itemDetail(iid) {
+  const it = IB[iid], fs = it.fields.map(k => FIELDS[k]);
+  const lines = [...new Set(fs.flatMap(f => f.direct))].sort((a, b) => a - b);
+  const rec = [...new Set(fs.flatMap(f => f.recLines))].sort((a, b) => a - b);
+  let code;
+  if (lines.length) code = `<b class="rh">使用箇所（${lines.length}行）</b>${srcBlock(SRC, mergeLines(lines))}`;
+  else if (rec.length) code = `<p>コードの中では個別に参照されていません。レコード全体の READ INTO・DISPLAY など（${rec.join("・")}行）で一緒に扱われます。</p>`;
+  else code = `<p>このバッチでは使われていません（定義のみ）。</p>`;
+  return `<div class="dhead"><h3>${it.id} ${esc(it.name)}</h3><span class="orig">${[...new Set(fs.map(f => f.name))].join(" · ")}</span></div><div class="dbody">
+    <dl class="dl"><dt>型</dt><dd class="mono">${it.pics.join(" / ")}</dd><dt>格納先</dt><dd>${fs.length}か所</dd><dt>このバッチでの使い方</dt><dd>${pill(USE_PILL[it.use], it.use)}</dd></dl>
+    ${it.pics.length > 1 ? `<div class="callout">格納先によって型が違います。移送時の桁あふれや変換に注意が必要です。</div>` : ""}
+    <div class="scroll"><table><thead><tr><th>格納先</th><th>物理項目</th><th>型</th><th class="num">位置</th><th>使い方</th></tr></thead><tbody>
+      ${fs.map(f => `<tr><td><button class="chip" data-go="D:${f.store}">${SB[f.store].no} ${esc(SB[f.store].name)}</button></td><td class="mono">${esc(f.name)}</td><td class="mono">${esc(f.pic)}</td><td class="num mono">${f.pos[0]}–${f.pos[1]}</td><td>${pill(USE_PILL[f.use], f.use)}</td></tr>`).join("")}
+    </tbody></table></div>
+    ${relHtml("I:" + iid)}
+    ${code}
+  </div>`;
+}
+R.items = () => {
+  const [, iid] = sp(state.selBy.items), f = state.itemFilter;
+  const cnt = { all: LOG.length, use: LOG.filter(i => i.use !== "定義のみ").length, key: LOG.filter(i => i.isKey).length };
+  return `<div class="viewhead"><h2>データ項目定義</h2><span class="doctag">設計書でいうと：データ項目定義書（項目辞書）</span></div>
+  <p class="lead">同じ意味の項目を1つのデータ項目（DI）にまとめ、どのファイルのどの項目に格納されているかをつなげています。名前の対応はデータ辞書（dictionary.json）で決めています。行を押すと、格納先、運ぶデータフロー、使用箇所が右に出ます。</p>
+  <div class="flowgrid">
+    <div class="panel">
+      <div class="toolbar filters">
+        ${[["all", "全項目"], ["use", "このバッチで使う"], ["key", "キー項目"]].map(([v, l]) => `<button class="btn" data-filter="${v}" aria-pressed="${f === v}">${l} ${cnt[v]}</button>`).join("")}
+        <input id="q" type="search" placeholder="項目名で絞り込む" aria-label="項目名で絞り込む">
+      </div>
+      <div class="scroll"><table>
+        <thead><tr><th>ID</th><th>データ項目</th><th>型</th><th>格納先</th><th>使い方</th></tr></thead>
+        <tbody>${LOG.map(it => `<tr data-sel="I:${it.id}" data-q="${esc((it.name + " " + it.fields.map(k => FIELDS[k].name).join(" ")).toLowerCase())}" data-use="${it.use}" data-key="${it.isKey}" class="${it.id === iid ? "selrow" : ""}"><td class="mono">${it.id}</td><td>${esc(it.name)}${it.isKey ? " " + pill("ok", "キー") : ""}</td><td class="mono">${it.pics.join(" / ")}</td><td class="mono">${[...new Set(it.fields.map(k => SB[FIELDS[k].store].no))].join(" ")}</td><td>${pill(USE_PILL[it.use], it.use)}</td></tr>`).join("")}</tbody>
+      </table></div>
+    </div>
+    <aside class="panel detail" id="detail">${itemDetail(iid)}</aside>
+  </div>`;
+};
+function applyItemFilter() {
+  const q = ($("#q")?.value || "").trim().toLowerCase(), f = state.itemFilter;
+  document.querySelectorAll("#main tr[data-q]").forEach(tr => {
+    const okF = f === "all" || (f === "use" && tr.dataset.use !== "定義のみ") || (f === "key" && tr.dataset.key === "true");
+    tr.hidden = !(okF && (!q || tr.dataset.q.includes(q)));
+  });
+}
+
+R.flow = () => `<div class="viewhead"><h2>処理フロー</h2><span class="doctag">設計書でいうと：処理フロー（流れ図）・処理詳細</span></div>
+  <p class="lead">正常系を縦一列に、例外を右（エラー）と左（EOFなど）に分けています。二重線の箱は別段落の呼出し、灰色の箱は同じ形の定型処理をまとめたものです。図の箱を押すと、右に根拠のコードが出ます。</p>
+  <div class="flowgrid">
+    <div class="panel">
+      <div class="toolbar"><label><input type="checkbox" id="showErr" ${state.showErr ? "checked" : ""}> 例外の経路も表示</label></div>
+      <div class="scroll" id="flowbox">${flowSvg()}</div>
+      <div class="legend"><span><i class="term"></i>端子</span><span><i></i>処理</span><span><i class="pre"></i>段落の呼出し</span><span><i class="dec"></i>判断</span><span><i class="warn"></i>EOFなど</span><span><i class="err"></i>エラー・未登録</span></div>
+    </div>
+    <aside class="panel detail" id="detail">${detailHtml(state.sel)}</aside>
+  </div>`;
+
+R.errors = () => `<div class="viewhead"><h2>例外と異常系</h2><span class="doctag">設計書でいうと：エラー処理一覧・メッセージ一覧</span></div>
+  <p class="lead">正常に進まないときの行き先を一覧にしました。行を押すと、処理フローの該当箇所を開きます。</p>
+  <div class="panel scroll"><table>
+    <thead><tr><th>事象</th><th>検知する段落</th><th>判定条件</th><th>出力</th><th>その後</th></tr></thead>
+    <tbody>${V.errors.map(r => `<tr data-node="${r.node}" style="cursor:pointer"><td>${pill(r.level, r.event)}</td><td class="mono">${esc(r.where)}</td><td>${esc(r.cond)}</td><td class="mono">${esc(r.output)}</td><td>${esc(r.after)}</td></tr>`).join("")}</tbody>
+  </table></div>`;
+
+R.trace = () => {
+  const pt = PATTERNS[state.pattern];
+  return `<div class="viewhead"><h2>処理パターン</h2><span class="doctag">設計書でいうと：テストケース・処理シナリオ</span></div>
+  <p class="lead">入力を選んで、1ステップずつ図をたどります。作業領域の値と出力ログが、ステップごとにどう変わるかを確認できます。ソースとサンプルから再構成した処理順で、実機での実行結果ではありません。</p>
+  <div class="flowgrid">
+    <div class="panel"><div class="scroll" id="flowbox">${flowSvg()}</div></div>
+    <aside class="panel detail"><div class="dbody trace">
+      <div class="tctl"><select id="pat" aria-label="入力パターン">${Object.entries(PATTERNS).map(([k, v]) => `<option value="${k}" ${k === state.pattern ? "selected" : ""}>${esc(v.name)}</option>`).join("")}</select></div>
+      <p style="font-size:12.5px;color:var(--muted)">${esc(pt.note)}</p>
+      <div class="tctl"><button class="btn" id="prev">前へ</button><button class="btn primary" id="next">次へ</button><button class="btn" id="reset">最初から</button><span class="mono" id="cnt"></span></div>
+      <div class="stepinfo" id="sinfo"></div>
+      <dl class="ws" id="ws"></dl>
+      <div><b style="font-size:12px;color:var(--muted)">出力ログ</b><div class="log" id="log"></div></div>
+    </div></aside>
+  </div>`;
+};
+function paintTrace() {
+  const steps = PATTERNS[state.pattern].steps, st = steps[state.step];
+  $("#cnt").textContent = `${state.step + 1} / ${steps.length}`;
+  $("#prev").disabled = state.step === 0;
+  $("#next").disabled = state.step === steps.length - 1;
+  $("#sinfo").innerHTML = `<b>${esc(NB[st.node].label)}</b>：${esc(st.info)}${st.flag ? " " + pill(st.flag, st.flag === "warn" ? "要注意" : "異常") : ""}`;
+  const ws = {}, changed = new Set(Object.keys(st.ws || {}));
+  for (let i = 0; i <= state.step; i++) Object.assign(ws, steps[i].ws || {});
+  const lab = V.workArea;
+  $("#ws").innerHTML = Object.keys(lab).map(k => `<dt>${esc(lab[k])}</dt><dd class="${changed.has(k) ? "chg" : ""}">${ws[k] !== undefined ? esc(/^ +$/.test(ws[k]) ? `（空白${ws[k].length}桁）` : ws[k]) : "—"}</dd>`).join("");
+  let html = "";
+  const seen = new Set();
+  steps.slice(0, state.step + 1).forEach((s, i) => (s.log || []).forEach(line => {
+    const dup = seen.has(line) && !/^(SUCCESSFUL|CARD NUMBER:|ACCOUNT ID :|CUSTOMER ID:)/.test(line);
+    seen.add(line);
+    html += `<div class="${i === state.step ? "new" : ""} ${dup ? "dup" : ""}">${esc(line)}${dup ? "  ← 2回目" : ""}</div>`;
+  }));
+  const log = $("#log");
+  log.innerHTML = html || `<span style="color:var(--muted)">まだ出力はありません</span>`;
+  log.scrollTop = log.scrollHeight;
+  paintFlow($("#flowbox"));
+}
+
+R.coverage = () => {
+  const N = SRC.length, procStart = V.procedureLine;
+  const flowLines = new Set();
+  NODES.forEach(n => n.lines.forEach(([a, b]) => { for (let i = a; i <= b; i++) flowLines.add(i); }));
+  let cells = "", exec = 0, hit = 0, def = 0, cm = 0;
+  for (let i = 1; i <= N; i++) {
+    const t = SRC[i - 1] || "", blank = !t.slice(6, 72).trim(), c = isComment(t);
+    let cls;
+    if (blank || c) { cls = "c-cm"; cm++; }
+    else if (i <= procStart) { cls = "c-def"; def++; }
+    else { exec++; if (flowLines.has(i)) { cls = "c-flow"; hit++; } else cls = "c-gap"; }
+    cells += `<span class="${cls}" data-line="${i}" title="${i}行"></span>`;
+  }
+  const paras = V.paragraphs, inFlow = (p) => [p.start, p.start + 1].some(i => flowLines.has(i));
+  const pHit = paras.filter(inFlow).length;
+  return `<div class="viewhead"><h2>網羅と未確認</h2><span class="doctag">設計書でいうと：レビュー記録・課題一覧</span></div>
+  <p class="lead">図に載っていない実行行が残っていないかを、原本の全行で確かめます。色の帯は1行目から${N}行目までを順に並べたもので、押すとその行のコードを表示します。図に載ったことは、意味まで確認できたことを意味しません。</p>
+  <div class="cov">
+    <div class="panel"><small>実行行のうち図に対応</small><b>${hit} / ${exec}</b><div class="bar"><i style="width:${Math.round(hit / exec * 100)}%"></i></div></div>
+    <div class="panel"><small>段落のうち図に対応</small><b>${pHit} / ${paras.length}</b><div class="bar"><i style="width:${Math.round(pHit / paras.length * 100)}%"></i></div></div>
+    <div class="panel"><small>定義・宣言の行</small><b>${def}</b><small>図の対象外（DB・ファイル一覧、データ項目定義で扱う）</small></div>
+    <div class="panel"><small>コメント・空行</small><b>${cm}</b><small>図の対象外</small></div>
+  </div>
+  <div class="panel"><div class="strip" id="strip">${cells}</div>
+    <div class="legend"><span><i style="background:var(--accent);border-color:var(--accent)"></i>図に対応</span><span><i style="background:var(--err);border-color:var(--err)"></i>実行行で図に無い</span><span><i style="background:var(--line);border-color:var(--line)"></i>定義</span><span><i style="background:var(--sunken)"></i>コメント・空行</span></div>
+  </div>
+  <div class="section-gap"></div>
+  <div class="flowgrid">
+    <div class="panel"><div class="dbody"><b>段落</b><div class="paras" style="padding:0">${paras.map(p => `<span class="pill ${inFlow(p) ? "ok" : "err"}" data-line="${p.start}" style="cursor:pointer">${esc(p.name)}</span>`).join("")}</div>
+      <b>未確認事項</b>
+      <ol class="open-items">${V.openItems.map(x => `<li>${esc(x)}</li>`).join("")}</ol>
+      <p class="ev" style="color:var(--muted);font-size:12px">原本：${esc(V.meta.source)}（SHA-256 ${V.meta.sha256.slice(0, 12)}…）</p></div></div>
+    <aside class="panel detail" id="covsrc"><div class="dbody"><p style="color:var(--muted)">帯か段落を押すと、その周辺のコードを表示します。</p></div></aside>
+  </div>`;
+};
+
+/* ---------- 画面ごとの操作 ---------- */
+function bindJumps() {
+  document.querySelectorAll("[data-jump]").forEach(b => b.addEventListener("click", () => {
+    const pre = $("#detail pre.src");
+    const line = pre && [...pre.querySelectorAll(".no")].find(x => x.textContent === b.dataset.jump);
+    if (line) line.parentElement.scrollIntoView({ block: "center", behavior: "smooth" });
+  }));
+}
+function afterRender() {
+  const fb = $("#flowbox");
+  if (state.view === "flow") {
+    paintFlow(fb);
+    bindFlow(fb, id => { state.sel = id; $("#detail").innerHTML = detailHtml(id); paintFlow(fb); bindJumps(); if (innerWidth <= 1100) $("#detail").scrollIntoView({ block: "start", behavior: "smooth" }); });
+    $("#showErr").addEventListener("change", e => { state.showErr = e.target.checked; paintFlow(fb); });
+    bindJumps();
+  }
+  if (state.view === "trace") {
+    bindFlow(fb, () => {});
+    const go = (d) => { const n = PATTERNS[state.pattern].steps.length; state.step = Math.max(0, Math.min(n - 1, state.step + d)); paintTrace(); };
+    $("#prev").onclick = () => go(-1);
+    $("#next").onclick = () => go(1);
+    $("#reset").onclick = () => { state.step = 0; paintTrace(); };
+    $("#pat").onchange = (e) => { state.pattern = e.target.value; state.step = 0; render(); };
+    paintTrace();
+  }
+  if (state.view === "errors") document.querySelectorAll("[data-node]").forEach(tr => tr.addEventListener("click", () => { state.sel = tr.dataset.node; show("flow"); }));
+  if (state.view === "dfd") document.querySelectorAll("#main svg [data-k]").forEach(g => g.addEventListener("click", () => { state.selBy.dfd = g.dataset.k; render(); }));
+  if (state.view === "db" || state.view === "items") {
+    document.querySelectorAll("#main tr[data-sel]").forEach(tr => tr.addEventListener("click", (e) => { if (e.target.closest("[data-go]")) return; state.selBy[state.view] = tr.dataset.sel; render(); }));
+  }
+  if (state.view === "items") {
+    document.querySelectorAll("[data-filter]").forEach(b => b.addEventListener("click", () => { state.itemFilter = b.dataset.filter; document.querySelectorAll("[data-filter]").forEach(x => x.setAttribute("aria-pressed", x === b)); applyItemFilter(); }));
+    $("#q").addEventListener("input", applyItemFilter);
+    applyItemFilter();
+  }
+  if (state.view === "coverage") {
+    document.querySelectorAll("#main [data-line]").forEach(el => el.addEventListener("click", () => {
+      const i = +el.dataset.line, a = Math.max(1, i - 6), b = Math.min(SRC.length, i + 10);
+      $("#covsrc").innerHTML = `<div class="dhead"><h3>${i}行目の周辺</h3></div><div class="dbody">${srcBlock(SRC, [[a, b]], [[i, i]])}</div>`;
+    }));
+  }
+}
+
+$("#h-title").textContent = V.meta.title;
+$("#h-pg").textContent = `${V.meta.program} · ${V.meta.type} · ${V.meta.lines}行`;
+if (V.links.job) $("#h-link").outerHTML = `<a class="uplink" href="${esc(V.links.job.href)}">${esc(V.links.job.label)} →</a>`;
+else $("#h-link").remove();
+startApp();
+</script>

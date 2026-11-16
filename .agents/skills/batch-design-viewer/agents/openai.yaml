@@ -1,0 +1,4 @@
+interface:
+  display_name: "バッチ設計ビューワー"
+  short_description: "COBOLバッチとJCLから、ジョブフロー・DFD・DB一覧・CRUD図・データ項目定義をつないだビューワーを作る"
+  default_prompt: "$batch-design-viewer を使い、このバッチのプログラムビューワーと、ジョブ全体のビューワー（DFD・DB一覧・CRUD図）を作って。"

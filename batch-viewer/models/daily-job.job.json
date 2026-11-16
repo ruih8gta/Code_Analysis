@@ -1,0 +1,71 @@
+{
+ "$schema": "batch-design-viewer/job-model@1",
+ "id": "daily",
+ "title": "日次取引の照合・計上・レポート",
+ "dictionary": "../dictionary.json",
+ "copybooks": ["../../sources/carddemo/cpy"],
+ "procs": ["../../sources/carddemo/proc"],
+ "jcl": ["../../sources/carddemo/jcl/POSTTRAN.jcl", "../../sources/carddemo/jcl/TRANREPT.jcl"],
+ "programs": {
+  "CBTRN01C": {"source": "../../original/CBTRN01C.cbl", "viewer": "CBTRN01C.html"},
+  "CBTRN02C": {"source": "../../sources/carddemo/cbl/CBTRN02C.cbl"},
+  "CBTRN03C": {"source": "../../sources/carddemo/cbl/CBTRN03C.cbl"}
+ },
+ "steps": [
+  {"id": "S1", "program": "CBTRN01C", "title": "日次取引のカード・口座照合", "assumed": true,
+   "desc": "日次取引のカード番号と口座が登録済みかを確かめ、結果を標準出力に出す。ファイルは更新しない。",
+   "note": "取得元にJCLが無いため、POSTTRANの前に流す事前チェックとして仮に置いている。DD名に割り当てるデータセットは、POSTTRANと同じ名前のDDに合わせた推定。",
+   "ddMap": {
+    "DALYTRAN": "AWS.M2.CARDDEMO.DALYTRAN.PS",
+    "CUSTFILE": "AWS.M2.CARDDEMO.CUSTDATA.VSAM.KSDS",
+    "XREFFILE": "AWS.M2.CARDDEMO.CARDXREF.VSAM.KSDS",
+    "CARDFILE": "AWS.M2.CARDDEMO.CARDDATA.VSAM.KSDS",
+    "ACCTFILE": "AWS.M2.CARDDEMO.ACCTDATA.VSAM.KSDS",
+    "TRANFILE": "AWS.M2.CARDDEMO.TRANSACT.VSAM.KSDS"
+   }},
+  {"id": "S2", "job": "POSTTRAN", "step": "STEP15", "program": "CBTRN02C", "title": "日次取引の計上",
+   "desc": "日次取引を検証し、通れば取引マスターに書き、口座残高とカテゴリ別残高を更新する。通らなければ却下ファイルに理由付きで書く。却下が1件でもあれば戻りコード4。"},
+  {"id": "S3", "job": "TRANREPT", "step": "STEP05R", "procStep": "PRC001", "title": "取引マスターのバックアップ",
+   "desc": "カタログ式プロシージャ REPROC（IDCAMS）で、取引マスターを新しい世代の順次ファイルに写す。",
+   "utility": {"FILEIN": "R", "FILEOUT": "C"},
+   "utilityNote": "IDCAMS の制御文（CNTLLIB の REPROCT）が未入手のため、FILEIN を読んで FILEOUT に写す REPRO と推定しています。"},
+  {"id": "S4", "job": "TRANREPT", "step": "STEP05R", "occurrence": 2, "title": "期間で抽出し、カード番号順に並べ替え",
+   "desc": "SORT で、処理日が指定期間（2022-01-01〜2022-07-06）の取引だけを残し、カード番号の昇順に並べ替える。",
+   "utility": {"SORTIN": "R", "SORTOUT": "C"}},
+  {"id": "S5", "job": "TRANREPT", "step": "STEP10R", "program": "CBTRN03C", "title": "取引明細レポートの作成",
+   "desc": "並べ替えた取引を読み、カード索引・取引種別・取引カテゴリで名称を引いて、ページ・口座・総合計付きの明細レポートを作る。"}
+ ],
+ "datasets": {
+  "AWS.M2.CARDDEMO.DALYTRAN.PS": {"name": "日次取引", "desc": "その日に発生した取引。ジョブの外（前工程）で作られる。"},
+  "AWS.M2.CARDDEMO.CUSTDATA.VSAM.KSDS": {"layoutRecord": "CUSTOMER-RECORD", "name": "顧客マスター", "desc": "DSN は推定（CBTRN01C 用の JCL が無いため）。"},
+  "AWS.M2.CARDDEMO.CARDXREF.VSAM.KSDS": {"name": "カード索引", "desc": "カード番号から口座IDと顧客IDを引く。"},
+  "AWS.M2.CARDDEMO.CARDDATA.VSAM.KSDS": {"layoutRecord": "CARD-RECORD", "name": "カードマスター", "desc": "DSN は推定（CBTRN01C 用の JCL が無いため）。"},
+  "AWS.M2.CARDDEMO.ACCTDATA.VSAM.KSDS": {"name": "口座マスター", "desc": "残高・限度額・当期の貸方／借方を持つ。"},
+  "AWS.M2.CARDDEMO.TRANSACT.VSAM.KSDS": {"name": "取引マスター", "desc": "計上済みの取引。"},
+  "AWS.M2.CARDDEMO.DALYREJS": {"name": "却下取引", "desc": "検証で却下した日次取引と理由。世代データセット。", "kind": "順次（世代）"},
+  "AWS.M2.CARDDEMO.TCATBALF.VSAM.KSDS": {"name": "カテゴリ別残高", "desc": "口座・取引種別・カテゴリごとの残高。"},
+  "AWS.M2.CARDDEMO.TRANSACT.BKUP": {"name": "取引バックアップ", "desc": "取引マスターの写し。世代データセット。", "kind": "順次（世代）", "layoutFrom": "AWS.M2.CARDDEMO.TRANSACT.VSAM.KSDS"},
+  "AWS.M2.CARDDEMO.TRANSACT.DALY": {"name": "期間内の取引", "desc": "期間で抽出し、カード番号順に並べ替えた取引。世代データセット。", "kind": "順次（世代）"},
+  "AWS.M2.CARDDEMO.TRANTYPE.VSAM.KSDS": {"name": "取引種別", "desc": "取引種別コードと名称。"},
+  "AWS.M2.CARDDEMO.TRANCATG.VSAM.KSDS": {"name": "取引カテゴリ", "desc": "取引種別・カテゴリコードと名称。"},
+  "AWS.M2.CARDDEMO.DATEPARM": {"name": "日付パラメーター", "desc": "レポートの対象期間（開始日・終了日）。"},
+  "AWS.M2.CARDDEMO.TRANREPT": {"name": "取引明細レポート", "desc": "133桁の印刷イメージ。世代データセット。", "kind": "順次（世代）"}
+ },
+ "overview": {
+  "summary": [
+   ["目的", "日次取引を照合・計上し、期間の取引明細レポートを作る"],
+   ["構成", "3ジョブ・5ステップ（うち1つは仮置き）"],
+   ["主な更新", "取引マスター（作成）、口座マスター・カテゴリ別残高（更新）"],
+   ["出力", "却下取引、取引明細レポート"]
+  ],
+  "lead": "CardDemo の POSTTRAN と TRANREPT に、JCL の無い CBTRN01C を事前チェックとして加えた構成です。POSTTRAN のあとに TRANREPT を流す順序は、取得元の README の一覧（TRANREPT はオンラインから投入）をもとにした仮定です。"
+ },
+ "openItems": [
+  "CBTRN01C を動かす JCL と、ジョブネットの中での位置",
+  "TRANREPT を POSTTRAN の後に流す運用か（取得元ではオンライン画面から投入）",
+  "REPROC が読む IDCAMS の制御文（REPROCT）",
+  "CBTRN02C が取引マスター（VSAM KSDS）を OPEN OUTPUT で開く前提（空のファイルを用意する手順があるか）",
+  "SORT の抽出期間（SYMNAMES に固定値）と DATEPARM の期間の関係",
+  "却下が出たときの戻りコード4を、後続ジョブやスケジューラーがどう扱うか"
+ ]
+}
