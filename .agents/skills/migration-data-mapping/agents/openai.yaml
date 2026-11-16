@@ -1,0 +1,4 @@
+interface:
+  display_name: "3. 変数・データ項目の対応"
+  short_description: "変数・レコード・DB項目の新旧対応、型や変換、未整理箇所を確認"
+  default_prompt: "$migration-data-mapping を使い、変数と入出力項目の新旧対応、型・桁・変換・利用箇所を整理して。"

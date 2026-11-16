@@ -1,0 +1,3 @@
+# 原本・Java・サンプルのSHA-256で検証するため、どの環境でもLFのまま扱う
+* text=auto eol=lf
+*.png binary

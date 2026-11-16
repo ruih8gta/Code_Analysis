@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.pyc
+
+# 検証・ブラウザーQAの一時フォルダー
+.coverage-verify-*/
+.viewer-browser-*/
+
+# ローカル専用の設定
+.claude/

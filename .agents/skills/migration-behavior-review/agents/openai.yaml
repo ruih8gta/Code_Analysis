@@ -1,0 +1,4 @@
+interface:
+  display_name: "2. 新旧の処理比較"
+  short_description: "旧新の処理対応と差分を整理し、静的確認と実行比較の根拠を分ける"
+  default_prompt: "$migration-behavior-review を使い、旧ソースと移行後ソースの処理対応、差分、実行比較の根拠を確認して。"

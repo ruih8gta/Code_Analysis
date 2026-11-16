@@ -1,0 +1,4 @@
+interface:
+  display_name: "モダナイゼーションレビュー"
+  short_description: "COBOLの移行レビューを現行仕様・新旧比較・項目対応の工程へ案内"
+  default_prompt: "$cobol-java-flow-viewer を使い、移行レビューを現行仕様、新旧処理比較、データ項目対応の工程に分けて進めて。"
