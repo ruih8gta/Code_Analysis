@@ -1,4 +1,28 @@
-# CBTRN01C 日次取引のカード・口座照合
+# CardDemo バッチのコード解析と可視化
+
+AWS のメインフレーム移行サンプル CardDemo の COBOL バッチを題材に、現行コードを読み解いて設計書の形で見せる仕組みと、COBOL から Java への変換をレビューする仕組みをまとめたリポジトリです。ビューアーはどれも、リポジトリを取得してブラウザーで開くだけで動く単独 HTML です。
+
+| 開くもの | 内容 |
+|---|---|
+| [viewer.html](viewer.html) | コード変換の可視化。CBTRN01C（COBOL 494行）を Java 138行へ移した変換の全体像と、現行仕様・新旧比較・項目対応のレビュー |
+| [batch-viewer/CBTRN01C.html](batch-viewer/CBTRN01C.html) | プログラムビューワー。1本のバッチを、概要・DFD・DB／ファイル一覧・データ項目定義・処理フローなど設計書の順に読む |
+| [batch-viewer/daily-job.html](batch-viewer/daily-job.html) | ジョブビューワー。3プログラムと JCL をまたいで、ジョブ全体の DFD・DB／ファイル一覧・CRUD 図・データ項目定義をまとめる |
+
+<details>
+<summary>フォルダー構成</summary>
+
+| パス | 内容 |
+|---|---|
+| `original/` | CBTRN01C の COBOL 原本（固定版）とライセンス |
+| `DailyTransactionLookup.java`、`sample/` | CBTRN01C の Java 版と、同梱の架空データ |
+| `viewer.html`、`review/`、`scripts/` | コード変換ビューアーと、その台帳・生成と検証のスクリプト |
+| `batch-viewer/` | バッチ設計ビューワー（生成した HTML、モデル、データ辞書） |
+| `sources/carddemo/` | ジョブビューワー用に取り込んだ CBTRN02C・CBTRN03C、COPY 句、JCL、PROC（[取得元](sources/carddemo/NOTICE.md)） |
+| `.agents/skills/` | 解析と可視化の手順をまとめたプロジェクト内スキル（[一覧](#プロジェクト内のスキル)） |
+
+</details>
+
+## 題材：CBTRN01C 日次取引のカード・口座照合
 
 1件の日次取引からカード番号を取り出し、カード索引で口座IDを引き、口座マスターにそのIDがあるかを確認するバッチです。6ファイルを入力用に開き、照合結果を標準出力に表示します。[COBOL原本](original/CBTRN01C.cbl) · [Java版](DailyTransactionLookup.java)
 
@@ -44,7 +68,49 @@ COBOLバッチとJCLから、ジョブフロー・DFD・DB／ファイル一覧�
 
 ![ジョブ全体のCRUD図。行がデータセット、列がステップで、口座マスターはCBTRN02Cが参照・更新する](batch-viewer/screenshot-job-crud.png)
 
-作り方は [batch-design-viewer スキル](.agents/skills/batch-design-viewer/SKILL.md) にまとめています。ソースから取れる事実（入出力文・レイアウト・DD）はスクリプトで抽出し、業務上の名前や処理のまとまりはモデル（[batch-viewer/models](batch-viewer/models/)）に書きます。別のプログラムやジョブにも、モデルを書いて同じ手順で広げられます。手順は [batch-viewer/README.md](batch-viewer/README.md) を参照してください。
+![CBTRN01CのDFD。日次取引を読み、カード索引と口座マスターで照合して結果を出力する4つのプロセスと、運ぶデータ項目](batch-viewer/screenshot-program-dfd.png)
+
+画面は、人が理解しやすい順（目的 → データ → 骨格 → 例外 → 細部）に並べています。
+
+| 画面 | プログラムビューワー | ジョブビューワー | 設計書でいうと |
+|---|---|---|---|
+| 概要 | 合意が必要な観点ごとに、根拠あり・推定・未確認を区別 | ジョブとステップの一覧 | バッチ処理一覧 |
+| ジョブフロー | プログラムの前後と入出力ファイル | ジョブとステップの実行順、DD とデータセットの対応 | ジョブフロー図 |
+| DFD | プロセス・データフロー・データストア | ステップとデータセットの流れ（読むだけ／作成・更新で上下に分ける） | DFD |
+| DB・ファイル一覧 | 編成・キー・レコードレイアウトと使う項目 | 全データセットを DSN でまとめ、どのステップが使うか | DB一覧・ファイル一覧 |
+| CRUD図 | — | データセット単位と項目単位。マスから根拠の行と JCL へ | CRUD図 |
+| データ項目定義 | 同じ意味の項目を1つにまとめ、格納先と使用行へ | データセットをまたいだ項目と、ステップごとの CRUD | データ項目定義書 |
+| 処理フロー・例外・処理パターン | 流れ図、例外の一覧、サンプル入力でのステップ実行 | ステップからプログラムビューワーへ | 処理フロー、エラー処理一覧 |
+| 網羅と未確認 | 全行の分類と、図に載っていない行 | 自動チェック（DD と SELECT の食い違い、仮置き、ジョブ外とのやり取り） | レビュー記録・課題一覧 |
+
+共通の ID は、S（ステップ）、P（プロセス）、F（データフロー）、D（データストア）、DI（データ項目）です。設計書の様式は、IPA『機能要件の合意形成ガイド』など一般的なバッチ設計書の構成を参考にしていますが、ガイドの章立てと1対1で対応させたものではありません。
+
+### 作り方
+
+ソースから取れる事実（入出力文・レイアウト・DD）はスクリプトで抽出し、業務上の名前や処理のまとまり、仮定はモデル（[batch-viewer/models](batch-viewer/models/)）に書きます。COBOL 項目名と日本語のデータ項目名の対応は、両方のビューワーで共有する [データ辞書](batch-viewer/dictionary.json) に書きます。HTML はモデルとソースから生成するので、直接編集しません。
+
+```sh
+S=.agents/skills/batch-design-viewer/scripts
+python -X utf8 $S/build_viewer.py program batch-viewer/models/CBTRN01C.program.json --out batch-viewer/CBTRN01C.html
+python -X utf8 $S/build_viewer.py job batch-viewer/models/daily-job.job.json --out batch-viewer/daily-job.html
+node $S/smoke_test.js batch-viewer/CBTRN01C.html batch-viewer/daily-job.html
+```
+
+`build_viewer.py` は、モデルが存在しない処理・項目・行番号を参照していると、何も書き出さずに止まります。`smoke_test.js` は Node.js と Playwright で、全画面の表示、つながりのリンク、幅400pxでの横はみ出しを確認します。別のプログラムやジョブに広げるときは、[batch-design-viewer スキル](.agents/skills/batch-design-viewer/SKILL.md)の手順に沿ってモデルを書きます。モデルの書き方は [program-model.md](.agents/skills/batch-design-viewer/references/program-model.md) と [job-model.md](.agents/skills/batch-design-viewer/references/job-model.md) にあります。
+
+ジョブ構成には仮定を含みます。CBTRN01C には JCL が無いため POSTTRAN の前の事前チェックとして仮置きし、TRANREPT を POSTTRAN の後に流す順序も仮定です（取得元ではオンライン画面から投入）。REPROC の IDCAMS 制御文は未入手で、処理内容は推定です。項目単位の CRUD は項目名の参照と代入先からの推定です。いずれも画面では破線や「推定」「仮置き」で区別しています。
+
+## プロジェクト内のスキル
+
+`.agents/skills/` に、解析と可視化の手順をスキルとしてまとめています。エージェントに依頼するときは、`$スキル名 を使って…` のように名前を指定します。
+
+| スキル | 使う場面 |
+|---|---|
+| [batch-design-viewer](.agents/skills/batch-design-viewer/SKILL.md) | COBOL バッチと JCL から、ジョブフロー・DFD・DB一覧・CRUD図・データ項目定義をつないだビューワーを作る |
+| [cobol-java-flow-viewer](.agents/skills/cobol-java-flow-viewer/SKILL.md) | COBOL から Java への移行レビューを、現行仕様・新旧比較・項目対応の工程へ案内する |
+| [legacy-spec-visualization](.agents/skills/legacy-spec-visualization/SKILL.md) | 現行ソースと処理フローを結び、段落・分岐・呼出しの抜けを確認する |
+| [migration-behavior-review](.agents/skills/migration-behavior-review/SKILL.md) | 旧新の処理対応と差分を整理し、静的確認と実行比較の根拠を分ける |
+| [migration-data-mapping](.agents/skills/migration-data-mapping/SKILL.md) | 変数・レコード・DB項目の新旧対応、型や変換、未整理箇所を確認する |
 
 ## 現行フローの概要
 
@@ -151,5 +217,7 @@ Java版は、ASCIIに変換した固定幅レコードを1行ずつ読みます�
 ## 検証と出典
 
 JDK 25.0.3でJava 17向けにコンパイルし、同梱3件と空入力で照合ログを確認しました。入力ファイル不足、行長の範囲外、マスターのキー重複では異常終了することも確認しました。AWSの公開データでは、日次取引300件、カード索引50件、口座50件を入力し、取引の表示と照合ログを原本の分岐から別途組み立てた期待値と照合しました。EOFでの再照合を含め、全1,807行が一致しました。z/OSでの実行結果との突合は未実施です。[検証に使用したAWSのASCIIデータ](https://github.com/aws-samples/aws-mainframe-modernization-carddemo/tree/59cc6c2fd7ebd7ef7925cad552a01a4b8b6e4d5e/app/data/ASCII)
+
+バッチ設計ビューワーは、`smoke_test.js` でプログラムビューワー9画面・リンク44件、ジョブビューワー7画面・リンク65件を確認しています。ジョブビューワー用の CBTRN02C・CBTRN03C、COPY 句10本、JCL（POSTTRAN・TRANREPT）、PROC（REPROC）は、CBTRN01C と同じ固定版から変更せずに取り込みました。[取得元とライセンス](sources/carddemo/NOTICE.md)
 
 保存したCOBOL原本は17,967バイトで、Git blob IDは `6494be3b695bd33f27b39f8d13dc5b510f92b7ed` です。[取得元の固定版](https://github.com/aws-samples/aws-mainframe-modernization-carddemo/blob/59cc6c2fd7ebd7ef7925cad552a01a4b8b6e4d5e/app/cbl/CBTRN01C.cbl) · [LICENSE](original/LICENSE) · [NOTICE](original/NOTICE)
